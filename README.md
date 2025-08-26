@@ -111,20 +111,19 @@ If snowpack and weather data are available locally, set the `SNOWPACK_DATA_ROOT`
 - **Windows**
   ```bash
   set SNOWPACK_DATA_ROOT="C:\path	o\your\snowpack\data"
-  python src
-un_prediction.py --date 2024-02-20
+  python srcun_prediction.py --date 2024-02-20
   ```
 
 ## Scripts Overview
 
-- **run_pipeline.py** — End-to-end training workflow.  
-- **run_prediction.py** — Generate daily predictions.  
-- **make_..._dataset.py** — Build feature datasets for training/prediction.  
-- **train_..._model.py** — Train and evaluate models.  
-- **predict.py** — Load trained models and run inference.  
-- **config.py** — Centralized parameters and paths.  
-- **dataset_utils.py** — Shared utilities for data processing and feature engineering.  
-- **snowpack_reader.py** — Specialized SNOWPACK `.pro` parser.  
+- `run_pipeline.py` — End-to-end training workflow.  
+- `run_prediction.py` — Generate daily predictions.  
+- `make_..._dataset.py` — Build feature datasets for training/prediction.  
+- `train_..._model.py` — Train and evaluate models.  
+- `predict.py` — Load trained models and run inference.  
+- `config.py` — Centralized parameters and paths.  
+- `dataset_utils.py` — Shared utilities for data processing and feature engineering.  
+- `snowpack_reader.py` — Specialized SNOWPACK `.pro` parser.  
 
 ## Contributing
 
