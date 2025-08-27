@@ -105,37 +105,39 @@ def predict_avalanche_hazards(prediction_date: Union[str, datetime]):
     # --- 2. Avalanche Event Prediction ---
     logging.info("--- Performing Avalanche Event Prediction ---")
     try:
-        event_model = joblib.load(config.PATHS["ARTIFACTS"]["event_model"])
-        event_scaler = joblib.load(config.PATHS["ARTIFACTS"]["event_scaler"])
-        with open(config.PATHS["ARTIFACTS"]["event_final_features"], 'r') as f:
-            event_feature_cols = json.load(f)
-        
-        with open(config.PATHS["ARTIFACTS"]["event_model_params"], "r") as f:
-            event_model_meta = json.load(f)
-            event_optimal_threshold = event_model_meta.get('best_threshold', 0.5)
-        
+        def load_event_model_and_scaler(config):
+            event_model = joblib.load(config.PATHS["ARTIFACTS"]["event_model"])
+            event_scaler = joblib.load(config.PATHS["ARTIFACTS"]["event_scaler"])
+            with open(config.PATHS["ARTIFACTS"]["event_final_features"], 'r') as f:
+                event_feature_cols = json.load(f)
+            with open(config.PATHS["ARTIFACTS"]["event_model_params"], "r") as f:
+                event_model_meta = json.load(f)
+                event_optimal_threshold = event_model_meta.get('best_threshold', 0.5)
+            return event_model, event_scaler, event_feature_cols, event_optimal_threshold
+
+        event_model, event_scaler, event_feature_cols, event_optimal_threshold = load_event_model_and_scaler(config)
         logging.info(f"Successfully loaded event model. Optimal threshold: {event_optimal_threshold}")
 
         for col in event_feature_cols:
             if col not in predictions_df.columns:
                 predictions_df[col] = 0
                 logging.warning(f"Event feature '{col}' not found in new data. Filling with 0.")
-        
+
         X_event = predictions_df[event_feature_cols]
         X_event_scaled = event_scaler.transform(X_event)
         event_raw_scores = event_model.predict_proba(X_event_scaled)[:, 1]
-        
+
         event_adjusted_scores = np.zeros_like(event_raw_scores)
         low_mask = event_raw_scores < event_optimal_threshold
         if np.any(low_mask):
-            denominator = event_optimal_threshold if event_optimal_threshold > 0 else 1
+            denominator = max(event_optimal_threshold, 1e-8)
             event_adjusted_scores[low_mask] = 0.5 * (event_raw_scores[low_mask] / denominator)
-        
+
         high_mask = ~low_mask
         if np.any(high_mask):
-            denominator = (1.0 - event_optimal_threshold) if (1.0 - event_optimal_threshold) > 0 else 1
+            denominator = max(1.0 - event_optimal_threshold, 1e-8)
             event_adjusted_scores[high_mask] = 0.5 + 0.5 * ((event_raw_scores[high_mask] - event_optimal_threshold) / denominator)
-        
+
         predictions_df['event_raw_score'] = event_raw_scores
         predictions_df['event_adjusted_score'] = event_adjusted_scores
         predictions_df['event_predicted_label'] = (event_adjusted_scores >= 0.5).astype(int)

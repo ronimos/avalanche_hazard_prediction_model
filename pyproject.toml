@@ -43,6 +43,7 @@ dependencies = [
     "cupy>=13.6.0",
     "folium>=0.20.0",
     "branca>=0.8.1",
+    "shapely>=2.1.1",
 ]
 
 [project.optional-dependencies]

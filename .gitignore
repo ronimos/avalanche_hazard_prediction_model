@@ -74,7 +74,7 @@ venv.bak/
 
 # Results, reports, and figures
 /results/
-/reports/
+/reports/figures/
 
 # Log files
 /logs/
