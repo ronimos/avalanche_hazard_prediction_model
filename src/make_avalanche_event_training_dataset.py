@@ -122,16 +122,9 @@ def main_pipeline():
 
     # --- Step 5: Finalize and Save Master Datasets ---
     if all_polygons_data:
-        final_master_df = create_and_log_master_dataframe(all_polygons_data)
-        
-        def create_and_log_master_dataframe(all_polygons_data):
-            """
-            Concatenate all polygon dataframes and log the result.
-            """
-            master_df = pd.concat(all_polygons_data, ignore_index=True)
-            logging.info("="*50)
-            logging.info("Successfully created master DataFrame for all polygons.")
-            return master_df
+        final_master_df = pd.concat(all_polygons_data, ignore_index=True)
+        logging.info("="*50)
+        logging.info("Successfully created master DataFrame for all polygons.")
 
         # Final Feature Engineering (from build_training_dataset.py)
         logging.info("Engineering final features...")
@@ -186,7 +179,7 @@ def main_pipeline():
             condition_count_gt_5 = (shifted_num_avalanches > 5)
 
             # Update 'avalanche_event' if either condition is met in any part of the window
-            final_master_df['avalanche_event'] |= (condition_d2 | condition_count_gt_5).fillna(False).astype(int)
+            final_master_df['avalanche_event'] = final_master_df['avalanche_event'] | (condition_d2 | condition_count_gt_5).fillna(False).astype(int)
 
         logging.info(f"Calculated 'avalanche_event'. Total events: {final_master_df['avalanche_event'].sum()}")
 

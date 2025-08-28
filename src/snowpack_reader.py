@@ -80,36 +80,42 @@ PARAM_CODES = {
 
 class SnowpackProfile:
     """
-    Represents a SNOWPACK .pro file, containing its metadata and time-series data.
+    Represents a single SNOWPACK .pro file, containing its metadata and time-series data.
 
-    This class handles the entire lifecycle of a .pro file, from reading and
-    parsing to performing hardware-accelerated numerical computations. It serves
-    as the primary interface for accessing and analyzing snowpack data.
+    This class serves as the primary interface for all interactions with a snowpack
+    profile. It handles the entire lifecycle of a .pro file, from reading and
+    parsing to performing hardware-accelerated numerical computations and
+    high-level analysis. The class is designed to be hardware-aware, automatically
+    using a GPU with `cupy` if available, or falling back to the CPU with `numpy`.
 
     Attributes:
-        filename (str): The path to the input .pro file.
-        save_netcdf (bool): If True, a NetCDF cache file will be created upon
-            first read to accelerate subsequent loads.
-        metadata (Dict): Station parameters parsed from the file header, such as
-            latitude, longitude, and altitude.
-        data (Optional[xr.Dataset]): An xarray Dataset containing all profile
-            data. The underlying arrays will be `cupy` arrays if a GPU is
-            used, otherwise they will be `numpy` arrays. This attribute is None
-            if the file fails to load or contains no valid data.
+        filename (str): The full path to the input .pro file being represented.
+        save_netcdf (bool): A flag indicating whether to create a NetCDF (.nc)
+            cache file upon first read. This can significantly accelerate
+            subsequent loads of the same file.
+        metadata (Dict): A dictionary containing station parameters parsed from
+            the file header, such as latitude, longitude, and altitude.
+        data (Optional[xr.Dataset]): An xarray Dataset that holds all the time-series
+            profile data. The data is organized by timestamp and layer index.
+            The underlying arrays will be `cupy` arrays if a GPU is available,
+            otherwise they will be standard `numpy` arrays. This attribute is
+            None if the file fails to load or contains no valid data.
     """
 
     def __init__(self, filename: str, save_netcdf: bool = False):
         """
-        Initializes an empty SnowpackProfile object.
+        Initializes an empty SnowpackProfile object without loading data.
 
-        Note: Data is not loaded upon instantiation. Use the `read()` classmethod
-        or the top-level `read_snowpack()` function to load data.
+        This constructor sets up the object but does not perform any file I/O.
+        Data loading is deferred to the `read()` classmethod or the top-level
+        `read_snowpack()` function to provide a cleaner and more explicit API.
 
         Args:
-            filename (str): The full path to the .pro file.
-            save_netcdf (bool): Flag to indicate if a .nc cache file should be
-                created. This is useful for speeding up subsequent loads of the
-                same file. Defaults to False.
+            filename (str): The full path to the .pro file that this object
+                will represent.
+            save_netcdf (bool): A flag to indicate if a .nc cache file should be
+                created upon the first successful read. This is useful for
+                speeding up subsequent loads of the same file. Defaults to False.
         """
         self.filename: str = filename
         self.save_netcdf: bool = save_netcdf
@@ -119,18 +125,24 @@ class SnowpackProfile:
     @classmethod
     def read(cls, filename: str, save_netcdf: bool = False) -> Optional['SnowpackProfile']:
         """
-        Reads and parses a .pro file, returning a new SnowpackProfile instance.
+        Factory method to read and parse a .pro file, returning a new, populated
+        SnowpackProfile instance.
 
-        This is the primary method for loading data. It handles file parsing,
-        data validation, and the creation of the underlying xarray Dataset.
+        This is the primary and recommended method for loading data into a
+        SnowpackProfile object. It encapsulates the entire file reading and
+        parsing logic, handling file validation, data structuring into an
+        xarray Dataset, and computation of derived properties like depth and rc_flat.
 
         Args:
-            filename (str): The full path to the .pro file.
-            save_netcdf (bool): If True, creates a .nc cache file after parsing.
+            filename (str): The full path to the .pro file to be read.
+            save_netcdf (bool): If True, instructs the instance to create a .nc
+                cache file in the same directory after a successful parse, which
+                will be used for faster loading in the future.
 
         Returns:
-            Optional[SnowpackProfile]: A new SnowpackProfile instance with loaded
-                                       data, or None if the file cannot be read.
+            A new SnowpackProfile instance containing the loaded data. If the
+            file cannot be read, is empty, or contains no valid data profiles,
+            this method returns None.
         """
         instance = cls(filename, save_netcdf)
         instance._read_profile()
@@ -138,28 +150,42 @@ class SnowpackProfile:
 
     def __len__(self) -> int:
         """
-        Returns the number of profiles (unique timestamps) in the dataset.
+        Returns the number of profiles (i.e., unique timestamps) in the dataset.
+
+        This allows for a simple way to check if the profile contains data,
+        e.g., `if snowpack_profile: ...`
 
         Returns:
-            int: The total number of timestamps. Returns 0 if no data is loaded.
+            The total number of timestamps in the loaded data. Returns 0 if no
+            data has been loaded or the file was empty.
         """
         return len(self.data.timestamp) if self.data is not None else 0
 
     def __repr__(self) -> str:
         """
-        Provides a developer-friendly string representation of the object.
+        Provides a concise, developer-friendly string representation of the object.
+
+        This representation is useful for debugging and logging, as it quickly
+        communicates the source file, the amount of data it contains, and the
+        compute device (CPU or GPU) being used for its calculations.
 
         Returns:
-            str: A string showing the filename, number of profiles, and the
-                 compute device (CPU or GPU) being used.
+            A string summarizing the object's state, including the filename,
+            number of profiles, and the active compute device.
         """
         device = "GPU" if GPU_AVAILABLE else "CPU"
         return f"<SnowpackProfile(filename='{self.filename}', profiles={len(self)}, device='{device}')>"
 
     def _read_profile(self):
         """
-        Orchestrates the reading and parsing of the entire .pro file with
-        a simplified, more readable state machine.
+        Internal method to orchestrate the reading and parsing of the entire .pro file.
+
+        This method implements a simple state machine to parse the different
+        sections of the .pro file format ([STATION_PARAMETERS], [DATA]). It is
+        designed to be robust against common file format errors, such as
+        malformed lines, and will log warnings rather than crashing. After
+        parsing, it triggers the creation of the xarray Dataset and the
+        computation of derived variables.
         """
         file_path = Path(self.filename)
         if not file_path.exists():
@@ -211,7 +237,20 @@ class SnowpackProfile:
 
 
     def _create_dataset_from_profiles(self, profiles: List[Dict]):
-        """Converts parsed data into an xarray.Dataset."""
+        """
+        Internal method to convert the parsed list of profile dictionaries into
+        a structured and hardware-accelerated xarray.Dataset.
+
+        This method takes the raw parsed data, determines the dimensions
+        (number of timestamps and maximum number of layers), creates NumPy arrays
+        to hold the data, and then transfers them to the GPU as CuPy arrays if
+        hardware acceleration is available. The final result is stored in the
+        `self.data` attribute.
+
+        Args:
+            profiles: A list of dictionaries, where each dictionary represents
+                a single timestamp and contains the data for all its layers.
+        """
         timestamps = pd.to_datetime([p['timestamp'] for p in profiles], format='%d.%m.%Y %H:%M:%S', errors='coerce')
         valid_indices = ~pd.isna(timestamps)
         profiles = [p for i, p in enumerate(profiles) if valid_indices[i]]
@@ -238,19 +277,19 @@ class SnowpackProfile:
         self.data = self.data.sortby('timestamp')
 
     def _parse_header_line(self, line: str):
-        """Parses a single line from the [STATION_PARAMETERS] section."""
+        """Helper function to parse a single line from the [STATION_PARAMETERS] section."""
         for key, value in HEADER_MAP.items():
             if line.startswith(key):
                 self.metadata[value] = line.split('=', 1)[1].strip()
 
     def _is_new_timestamp_line(self, line: str) -> Tuple[bool, Optional[str]]:
-        """Checks if a data line marks the beginning of a new profile."""
+        """Helper function to check if a data line marks the beginning of a new profile."""
         parts = line.split(',', 1)
         if len(parts) < 2: raise IndexError("Line does not contain a comma.")
         return (True, parts[1]) if parts[0] == "0500" else (False, None)
 
     def _parse_data_line(self, line: str, current_ts_data: Dict):
-        """Parses a single data line containing layer data for a parameter."""
+        """Helper function to parse a single data line containing layer data."""
         parts = line.split(',')
         if len(parts) < 3: return # Not enough data to be a valid parameter line
         if (param_name := PARAM_CODES.get(parts[0])):
@@ -258,8 +297,8 @@ class SnowpackProfile:
 
     def _compute_and_add_depth(self):
         """
-        Calculates the depth of each layer from the snow surface and adds it
-        to the dataset.
+        Calculates the depth of each layer relative to the snow surface (top-down)
+        and adds it as a new variable named 'depth' to the dataset.
         """
         if self.data is None or 'height' not in self.data.data_vars:
             logger.warning("Cannot calculate depth without 'height' variable.")
@@ -277,7 +316,8 @@ class SnowpackProfile:
         
     def _compute_and_add_rc_flat_vectorized(self):
         """
-        Calculates rc_flat for all profiles in a single vectorized operation.
+        Calculates the `rc_flat` stability parameter for all layers and profiles
+        in a single, efficient vectorized operation and adds it to the dataset.
         """
         if self.data is None: return
         required_vars = {'density', 'grain_size', 'shear_strength', 'height'}
@@ -342,23 +382,24 @@ class SnowpackProfile:
 
     def slice(self, start_date: Optional[str] = None, end_date: Optional[str] = None) -> 'SnowpackProfile':
         """
-        Creates a new SnowpackProfile object containing a slice of the data
-        for a specified date range.
+        Creates a new, independent SnowpackProfile object containing a temporal
+        slice of the data for a specified date range.
 
-        This method allows for chaining of operations. It returns a new,
-        independent SnowpackProfile instance, preserving the original object.
+        This method enables a clean, chainable API for analysis (e.g.,
+        `profile.slice('2023-01-01', '2023-01-31').get_profile_summary(...)`).
+        It returns a new SnowpackProfile instance, ensuring that the original
+        object remains unmodified and can be reused.
 
         Args:
-            start_date (Optional[str], optional): The start date for the slice
-                in 'YYYY-MM-DD' format. If None, the slice starts from the
-                beginning of the data. Defaults to None.
-            end_date (Optional[str], optional): The end date for the slice in
-                'YYYY-MM-DD' format. If None, the slice extends to the end of
-                the data. Defaults to None.
+            start_date: The start date for the slice in 'YYYY-MM-DD' format.
+                If None, the slice starts from the beginning of the available data.
+            end_date: The end date for the slice in 'YYYY-MM-DD' format.
+                If None, the slice extends to the end of the available data.
 
         Returns:
-            SnowpackProfile: A new SnowpackProfile instance containing only the
-                             data within the specified date range.
+            A new SnowpackProfile instance containing only the data within the
+            specified date range. If no data is found in the range, it returns
+            a new instance with an empty data attribute.
         """
         if self.data is None or self.data.timestamp.size == 0: return self
         timestamps = pd.to_datetime(self.data.timestamp.values).normalize()
@@ -379,15 +420,17 @@ class SnowpackProfile:
 
     def save_as_netcdf(self, output_path: str):
         """
-        Saves the profile's xarray.Dataset to a NetCDF file.
+        Saves the profile's entire xarray.Dataset to a NetCDF (.nc) file.
 
-        NetCDF is a binary format that allows for much faster loading than
-        re-parsing the original .pro text file. This method handles the
-        conversion from GPU (CuPy) to CPU (NumPy) arrays before saving, as
-        required by the underlying NetCDF library.
+        NetCDF is an efficient, binary format that allows for much faster data
+        loading compared to re-parsing the original .pro text file. This method
+        is particularly useful for caching large datasets. It automatically
+        handles the conversion from GPU (CuPy) to CPU (NumPy) arrays before
+        saving, as this is a requirement of the underlying NetCDF library.
 
         Args:
-            output_path (str): The destination file path for the .nc file.
+            output_path: The destination file path where the .nc file will be saved.
+                The necessary parent directories will be created if they do not exist.
         """
         if self.data is None or self.data.timestamp.size == 0:
             logger.warning(f"No data to save for NetCDF file: {output_path}")
@@ -401,7 +444,22 @@ class SnowpackProfile:
             logger.error(f"Failed to save NetCDF file to {output_path}: {e}", exc_info=True)
 
     def _prepare_daily_profiles(self, start_date: Optional[str], end_date: Optional[str]) -> pd.DataFrame:
-        """Slices data, selects noon profiles, and returns a single DataFrame."""
+        """
+        Internal helper to slice data and select the single most representative
+        profile (closest to noon) for each day.
+
+        This method is a crucial preprocessing step for daily summary analyses.
+        It ensures that comparisons between days are consistent by using data
+        from approximately the same time each day.
+
+        Args:
+            start_date: The start date for the selection ('YYYY-MM-DD').
+            end_date: The end date for the selection ('YYYY-MM-DD').
+
+        Returns:
+            A pandas DataFrame containing only the noon profiles for each day
+            in the specified range.
+        """
         sliced_profile = self.slice(start_date, end_date)
         if sliced_profile.data is None or sliced_profile.data.timestamp.size == 0:
             return pd.DataFrame()
@@ -422,7 +480,7 @@ class SnowpackProfile:
         return closest_indices.copy()
 
     def _calculate_layer_thickness(self, profile_layers: pd.DataFrame, from_height: Optional[float], above_or_below: str) -> pd.DataFrame:
-        """Calculates the thickness of each layer in a profile."""
+        """Internal helper to calculate the thickness of each layer in a profile DataFrame."""
         if profile_layers.empty:
             return profile_layers
         
@@ -439,7 +497,7 @@ class SnowpackProfile:
         return profile_layers
 
     def _calculate_layer_summaries(self, profile_layers: pd.DataFrame, parameters: Dict[str, Any]) -> pd.Series:
-        """Performs all statistical calculations for a single profile."""
+        """Internal helper to perform all statistical calculations for a single profile's layers."""
         summary_data = {}
         for name, calc in parameters.items():
             if callable(calc):
@@ -447,7 +505,7 @@ class SnowpackProfile:
                 except Exception: summary_data[name] = np.nan
                 continue
 
-            param, calc_type = (name.split('-')[0], calc) if isinstance(calc, str) else (calc if isinstance(calc, tuple) else (None, None))
+            param, calc_type = (calc if isinstance(calc, tuple) else (name.split('-')[0], calc))
             if not param or param not in profile_layers: continue
 
             series = profile_layers[param].dropna()
@@ -472,7 +530,7 @@ class SnowpackProfile:
         return pd.Series(summary_data)
 
     def _summarize_layers(self, profile_layers: pd.DataFrame, parameters: Dict[str, Any], from_height: Optional[float], above_or_below: str) -> pd.Series:
-        """Orchestrates the summarization of a single day's snow profile."""
+        """Internal helper to orchestrate the summarization of a single day's snow profile."""
         # Filter layers based on height criteria
         if from_height is not None:
             if above_or_below == 'above':
@@ -491,52 +549,109 @@ class SnowpackProfile:
 
     def get_profile_summary(self, parameters_to_calculate: Dict[str, Any], from_height: Optional[float] = None, above_or_below: str = 'above', start_date: Optional[str] = None, end_date: Optional[str] = None) -> pd.DataFrame:
         """
-        Extracts summary statistics for specified parameters from the snowpack.
+        Extracts daily summary statistics for specified snowpack parameters.
 
         This is a high-level analysis function that computes aggregate statistics
-        for the snow profile on each day within a given date range. It can
-        analyze the entire snowpack or a specific section (e.g., the slab
-        above a certain height).
+        (e.g., mean, max, weighted mean) for the snow profile on each day within
+        a given date range. It can analyze the entire snowpack or a specific
+        vertical section (e.g., the slab above a certain height). This method
+        uses a robust looping mechanism to process each day individually,
+        ensuring reliable results even with inconsistent data.
 
         Args:
-            parameters_to_calculate (Dict[str, Any]): A dictionary mapping a
-                new column name to a calculation type.
+            parameters_to_calculate: A dictionary that defines the calculations
+                to perform. Keys are the desired output column names, and values
+                specify the parameter and calculation type.
                 Examples:
-                - {'slab_density_mean': ('density', 'mean')}
-                - {'max_temp': ('temperature', 'max')}
-                - {'custom_metric': lambda df: df['col'].sum()}
-            from_height (Optional[float], optional): A height in meters used to
-                slice the snowpack vertically. If None, the entire profile is
-                used. Defaults to None.
-            above_or_below (str, optional): Specifies which part of the snowpack
-                to analyze relative to `from_height`. Must be 'above' or
-                'below'. Defaults to 'above'.
-            start_date (Optional[str], optional): The start date for the summary
-                ('YYYY-MM-DD'). Defaults to the start of the profile data.
-            end_date (Optional[str], optional): The end date for the summary
-                ('YYYY-MM-DD'). Defaults to the end of the profile data.
+                - `{'slab_density_mean': ('density', 'mean')}`
+                - `{'max_temp': ('temperature', 'max')}`
+                - `{'custom_metric': lambda df: df['col'].sum()}`
+            from_height: An optional height in meters used to slice the snowpack
+                vertically for analysis (e.g., analyze only layers above 0.5m).
+                If None, the entire profile is used.
+            above_or_below: Specifies which part of the snowpack to analyze
+                relative to `from_height`. Must be 'above' or 'below'.
+            start_date: The start date for the summary ('YYYY-MM-DD'). Defaults
+                to the start of the profile data.
+            end_date: The end date for the summary ('YYYY-MM-DD'). Defaults to
+                the end of the profile data.
 
         Returns:
-            pd.DataFrame: A DataFrame with a 'date' index and a column for each
+            A pandas DataFrame with a 'date' index and a column for each
             requested summary statistic. Returns an empty DataFrame if no data
             is available in the specified range.
         """
         # Step 1: Prepare the data by selecting the single most representative
         # profile (closest to noon) for each day in the date range.
-        daily_profiles_df = self._prepare_daily_profiles(start_date, end_date)
-        if daily_profiles_df.empty:
+        sliced_profile = self.slice(start_date, end_date)
+        if sliced_profile.data is None or sliced_profile.data.timestamp.size == 0:
             return pd.DataFrame()
+        
+        data_in_range = sliced_profile.data
+        full_df = (data_in_range.as_numpy().to_dataframe().reset_index() 
+                   if GPU_AVAILABLE 
+                   else data_in_range.to_dataframe().reset_index())
 
-        # Step 2: Use groupby().apply() to run the summarization logic on each
-        # daily profile. This is a clean, pandas-idiomatic approach.
-        summaries = daily_profiles_df.groupby(daily_profiles_df['timestamp'].dt.normalize()).apply(
-            self._summarize_layers,
-            parameters=parameters_to_calculate,
-            from_height=from_height,
-            above_or_below=above_or_below
-        )
-        summaries.index.name = 'date'
-        return summaries
+        noon_time = full_df['timestamp'].dt.normalize() + pd.Timedelta(hours=12)
+        full_df['time_from_noon'] = (full_df['timestamp'] - noon_time).abs()
+        closest_indices = full_df.loc[full_df.groupby(full_df['timestamp'].dt.date)['time_from_noon'].idxmin()]
+        noon_df = closest_indices.copy()
+        
+        if noon_df.empty:
+            return pd.DataFrame()
+        
+        # Step 2: Use a robust loop to iterate through each day's profile
+        summary_list = []
+        for ts in noon_df['timestamp']:
+            summary_row = {'date': ts.normalize()}
+            profile_layers = full_df[full_df['timestamp'] == ts].copy()
+
+            if from_height is not None:
+                if above_or_below == 'above':
+                    profile_layers = profile_layers[profile_layers['height'] > from_height]
+                else:
+                    profile_layers = profile_layers[profile_layers['height'] <= from_height]
+
+            if not profile_layers.empty:
+                profile_layers = self._calculate_layer_thickness(profile_layers, from_height, above_or_below)
+
+            # Calculate summaries for the current profile
+            for name, calc in parameters_to_calculate.items():
+                if callable(calc):
+                    try:
+                        summary_row[name] = calc(profile_layers)
+                    except Exception as e:
+                        logger.warning(f"Custom function for '{name}' failed: {e}")
+                    continue
+
+                param, calc_type = (calc if isinstance(calc, tuple) else (name.split('-')[0], calc))
+                if not param or param not in profile_layers: continue
+
+                series = profile_layers[param].dropna()
+                if series.empty: continue
+                if param == 'hand_hardness': series = series.abs()
+                
+                if calc_type == 'min':
+                    summary_row[name] = series.min()
+                    if 'height' in profile_layers.columns:
+                        summary_row[f"{name}-height"] = profile_layers.loc[series.idxmin()]['height']
+                elif calc_type == 'max':
+                    summary_row[name] = series.max()
+                    if 'height' in profile_layers.columns:
+                        summary_row[f"{name}-height"] = profile_layers.loc[series.idxmax()]['height']
+                elif calc_type == 'mean':
+                    summary_row[name] = series.mean()
+                elif calc_type == 'weighted_mean':
+                    weights = profile_layers.loc[series.index]['thickness']
+                    if weights.sum() > 0:
+                        summary_row[name] = np.average(series, weights=weights)
+            
+            summary_list.append(summary_row)
+
+        if not summary_list:
+            return pd.DataFrame()
+            
+        return pd.DataFrame(summary_list).set_index('date')
 
     def _get_condition_mask(self, df: pd.DataFrame, param: str, condition: str) -> pd.Series:
         """Parses a condition string and returns a boolean mask for a DataFrame column."""
@@ -594,7 +709,7 @@ class SnowpackProfile:
             score += mask.astype(int) * weight
 
         max_score = score.max()
-        if max_score == 0:
+        if max_score == 0 or pd.isna(max_score):
             result = {'height': np.nan, 'matching_criteria_count': 0, 'matching_parameters': {}}
             for param in criteria: result[param] = np.nan
             return pd.Series(result)
@@ -618,7 +733,8 @@ class SnowpackProfile:
         return pd.Series(result)
 
     def find_layer_by_criteria(self, criteria: Dict[str, str], search_from: str = 'top', start_date: Optional[str] = None, end_date: Optional[str] = None) -> pd.DataFrame:
-        """Finds the single layer that best matches a set of prioritized criteria for each day.
+        """
+        Finds the single layer that best matches a set of prioritized criteria for each day.
 
         This powerful analysis method searches through each daily snow profile to
         identify the single most relevant layer (e.g., a potential weak layer)

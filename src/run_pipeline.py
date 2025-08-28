@@ -143,4 +143,3 @@ if __name__ == "__main__":
             exit(1) # Exit with an error code
 
     run_full_pipeline(prediction_date=run_date)
-
