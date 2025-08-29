@@ -384,10 +384,7 @@ def compute_and_save_shap(model: BaseEstimator, X_df: pd.DataFrame, model_name: 
         else:
             # Fallback for other models, might be slower
             # Use a sample of the data for KernelExplainer if X_df is too large, for performance
-            if X_df.shape[0] > 1000:
-                X_sample_df = shap.utils.sample(X_df, 1000)
-            else:
-                X_sample_df = X_df
+            X_sample_df = shap.utils.sample(X_df, 1000) if X_df.shape[0] > 1000 else X_df
             explainer = shap.KernelExplainer(model.predict_proba, X_sample_df)
             X_df = X_sample_df # Use the sampled data for SHAP value computation
 
@@ -449,7 +446,7 @@ def compute_and_save_shap(model: BaseEstimator, X_df: pd.DataFrame, model_name: 
             plt.xlabel("Mean Absolute SHAP Value (Impact on model output)")
             plt.tight_layout()
             # Save SHAP plot to the specified path in config
-            plt.savefig(config.PATHS["ARTIFACTS"]["event_shap_plot"].parent / f"shap_avalanche_event_feature_importance_{model_name}.png")
+            plt.savefig(config.PATHS["RESULTS"]["event_shap_plot"].parent / f"shap_avalanche_event_feature_importance_{model_name}.png")
             plt.close()
 
         return shap_df
@@ -544,7 +541,7 @@ def main() -> None:
     best_metrics: Dict[str, Any] = {}
 
     n_feature: int = X.shape[1]
-    features_list: List[int] = [int(x * n_feature) for x in [1, 0.9, 0.8, 0.7, 0.5]]
+    features_list: List[int] = [int(x * n_feature) for x in [1, 0.9]]#, 0.8, 0.7, 0.5]]
     total_iterations: int = len(list(rf_param_grid)) * len(features_list)
 
     with tqdm(total=total_iterations, desc="Overall Progress") as pbar:
@@ -711,7 +708,7 @@ def main() -> None:
         plt.title('Precision-Recall Curve on Full Data (Final Model)')
         plt.legend()
         plt.tight_layout()
-        plt.savefig(config.PATHS["ARTIFACTS"]["event_pr_curve_plot"])
+        plt.savefig(config.PATHS["RESULTS"]["event_pr_curve_plot"])
         plt.close()
 
         shap_df_final: pd.DataFrame = compute_and_save_shap(best_model.final_model_,

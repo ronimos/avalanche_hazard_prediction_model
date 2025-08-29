@@ -71,6 +71,7 @@ venv.bak/
 
 # Models, scalers, and other trained artifacts
 /models/
+/artifacts/
 
 # Results, reports, and figures
 /results/

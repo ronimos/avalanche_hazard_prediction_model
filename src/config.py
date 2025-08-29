@@ -44,7 +44,7 @@ logging.basicConfig(
 # --- BASE DIRECTORIES ---
 # Assumes this config.py is in the `src` directory.
 SRC_DIR = Path(__file__).parent
-PROJECT_ROOT = SRC_DIR.parent
+ROOT_DIR = SRC_DIR.parent
 
 # --- DYNAMIC DATA SOURCE CONFIGURATION ---
 # Check for the SNOWPACK_DATA_ROOT environment variable.
@@ -60,14 +60,14 @@ if IS_LOCAL_DATA_SOURCE:
 else:
     logging.info("ℹ️ No SNOWPACK_DATA_ROOT environment variable found. Defaulting to project's data/external/snowpack directory.")
     # Default behavior: download to the project's local directory.
-    SNOWPACK_OUTPUT_DIR = PROJECT_ROOT / "data" / "external" / "snowpack"
+    SNOWPACK_OUTPUT_DIR = ROOT_DIR / "data" / "external" / "snowpack"
 
 
 # --- CORE FOLDER STRUCTURE ---
-DATA_DIR = PROJECT_ROOT / "data"
-MODELS_DIR = PROJECT_ROOT / "models"
-RESULTS_DIR = PROJECT_ROOT / "results"
-REPORTS_DIR = PROJECT_ROOT / "reports"
+DATA_DIR = ROOT_DIR / "data"
+MODELS_DIR = ROOT_DIR / "models"
+RESULTS_DIR = ROOT_DIR / "results"
+ARTIFACTS_DIR = ROOT_DIR / "artifacts"
 
 # Create directories if they don't exist
 DATA_DIR.mkdir(exist_ok=True)
@@ -77,7 +77,9 @@ DATA_DIR.mkdir(exist_ok=True)
 SNOWPACK_OUTPUT_DIR.mkdir(exist_ok=True) # Ensure the target snowpack dir exists
 MODELS_DIR.mkdir(exist_ok=True)
 RESULTS_DIR.mkdir(exist_ok=True)
-(REPORTS_DIR / "figures").mkdir(exist_ok=True)
+(RESULTS_DIR / "figures").mkdir(exist_ok=True)
+ARTIFACTS_DIR = ROOT_DIR / "artifacts"
+ARTIFACTS_DIR.mkdir(exist_ok=True)
 
 
 # --- FILE PATHS ---
@@ -108,33 +110,53 @@ PATHS = {
     
     # --- Model & Analysis Artifacts ---
     "ARTIFACTS": {
+        # --- Models, Scalers, Calibrators ---
+        "event_model": ARTIFACTS_DIR / "event_model.joblib",
+        "event_scaler": ARTIFACTS_DIR / "event_scaler.joblib",
+        "hazard_model": ARTIFACTS_DIR / "hazard_model.joblib",
+        "hazard_scaler": ARTIFACTS_DIR / "hazard_scaler.joblib",
+        "hazard_calibrators": ARTIFACTS_DIR / "hazard_calibrators.joblib",
+        
+        # --- Feature Lists & Params ---
+        "event_final_features": ARTIFACTS_DIR / "event_final_features.json",
+        "event_model_params": ARTIFACTS_DIR / "event_model_params.json",
+        "hazard_final_features": ARTIFACTS_DIR / "hazard_final_features.json",
+        
+        # --- Intermediate Predictions ---
+        "event_adjusted_predictions": ARTIFACTS_DIR / "event_adjusted_predictions.csv",
+
+
         # Avalanche Event Model Artifacts
-        "event_model": MODELS_DIR / "avalanche_event_model.joblib",
-        "event_scaler": MODELS_DIR / "avalanche_event_feature_scaler.joblib",
-        "event_final_features": MODELS_DIR / "avalanche_event_final_feature_list.json",
-        "event_model_params": MODELS_DIR / "avalanche_event_best_model_params.json",
         "event_predictions": RESULTS_DIR / "avalanche_event_predictions.csv", # Raw predictions
         "event_results_summary": RESULTS_DIR / "avalanche_event_model_performance_summary.csv",
         "event_shap_values": RESULTS_DIR / "avalanche_event_shap_feature_importance.csv",
-        "event_shap_plot": REPORTS_DIR / "figures" / "shap_avalanche_event_feature_importance.png",
-        "event_pr_curve_plot": REPORTS_DIR / "figures" / "avalanche_event_precision_recall_curve.png",
         "event_feature_names": MODELS_DIR / "avalanche_event_shap_feature_names.csv",
-        "event_adjusted_predictions": RESULTS_DIR / "event_adjusted_predictions.csv", # Adjusted predictions from event model
         "all_predictions": RESULTS_DIR / "model_predictions.json",
 
         # Avalanche Hazard Model Artifacts
-        "hazard_model": MODELS_DIR / "avalanche_hazard_model.joblib",
-        "hazard_scaler": MODELS_DIR / "avalanche_hazard_feature_scaler.joblib",
-        "hazard_final_features": MODELS_DIR / "avalanche_hazard_final_feature_list.json",
         "hazard_model_params": MODELS_DIR / "avalanche_hazard_best_model_params.json",
         "hazard_predictions_csv": RESULTS_DIR / "avalanche_hazard_predictions.csv", # Final hazard predictions
         "hazard_predictions_json": RESULTS_DIR / "avalanche_hazard_predictions.json", # Final hazard predictions
         "hazard_results_summary": RESULTS_DIR / "avalanche_hazard_model_performance_summary.csv",
         "hazard_shap_values": RESULTS_DIR / "avalanche_hazard_shap_feature_importance.csv",
-        "hazard_shap_plot": REPORTS_DIR / "figures" / "shap_avalanche_hazard_feature_importance.png",
-        "hazard_confusion_matrix_plot_base": REPORTS_DIR / "figures", # Base path for confusion matrix plots
         "hazard_feature_names": MODELS_DIR / "avalanche_hazard_shap_feature_names.csv",
-    }
+    },
+    "RESULTS": {
+        # --- Final Predictions & Reports ---
+        "hazard_predictions_csv": RESULTS_DIR / "final_hazard_predictions.csv",
+        "event_model_report": RESULTS_DIR / "avalanche_event_model_report.json",
+        "hazard_model_report": RESULTS_DIR / "avalanche_hazard_model_report.json",
+
+        # --- Plots & Visualizations ---
+        "event_pr_curve_plot": RESULTS_DIR / "figures" / "avalanche_event_precision_recall_curve.png",
+        "event_shap_plot": RESULTS_DIR / "figures" / "shap_event_importance.png",
+        "hazard_shap_plot": RESULTS_DIR / "figures" / "shap_hazard_importance.png",
+        "reliability_plot_uncalibrated": RESULTS_DIR / "figures" / "reliability_uncalibrated.png",
+        "reliability_plots": RESULTS_DIR / "figures",
+        "prediction_map": RESULTS_DIR, # The plot_results script will save maps here by date
+        "hazard_confusion_matrix_plot_base": RESULTS_DIR / "figures", # Base path for confusion matrix plots
+
+    },
 }
 
 

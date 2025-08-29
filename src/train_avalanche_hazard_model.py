@@ -280,11 +280,11 @@ def compute_and_save_shap(model: Any, X_df: pd.DataFrame, model_name: str, plot_
     """
     logging.info(f"Generating SHAP values for {model_name}...")
     try:
-        # Use a sample of the data for SHAP if X_df is too large, for performance
-        if X_df.shape[0] > 1000:
-            X_sample_df = shap.utils.sample(X_df, 1000)
-        else:
-            X_sample_df = X_df
+        def get_shap_sample(df: pd.DataFrame, max_samples: int = 1000) -> pd.DataFrame:
+            """Return a sample of the DataFrame if it exceeds max_samples, else return the DataFrame itself."""
+            return shap.utils.sample(df, max_samples) if df.shape[0] > max_samples else df
+
+        X_sample_df = get_shap_sample(X_df, 1000)
 
         # Convert the sample DataFrame to a NumPy array for SHAP explainer
         X_sample_np = X_sample_df.values
@@ -385,7 +385,7 @@ def compute_and_save_shap(model: Any, X_df: pd.DataFrame, model_name: str, plot_
             plt.xlabel("Mean Absolute SHAP Value (Impact on model output)")
             plt.tight_layout()
             # Save SHAP plot to the specified path in config
-            plt.savefig(config.PATHS["ARTIFACTS"]["hazard_shap_plot"].parent / f"shap_avalanche_hazard_feature_importance_{model_name}.png")
+            plt.savefig(config.PATHS["RESULTS"]["hazard_shap_plot"].parent / f"shap_avalanche_hazard_feature_importance_{model_name}.png")
             plt.close()
 
         return shap_df
@@ -722,9 +722,9 @@ def main() -> None:
         plt.xlabel('Predicted Hazard (1-4)')
         plt.ylabel('True Hazard (1-4)')
         plt.title(f'Confusion Matrix (Counts) for Best Model ({best_overall_model_name})')
-        plt.savefig(config.PATHS["ARTIFACTS"]["hazard_confusion_matrix_plot_base"] / f"confusion_matrix_counts_{best_overall_model_name}.png")
+        plt.savefig(config.PATHS["RESULTS"]["hazard_confusion_matrix_plot_base"] / f"confusion_matrix_counts_{best_overall_model_name}.png")
         plt.close()
-        logging.info(f"Confusion Matrix (Counts) plot saved to '{config.PATHS['ARTIFACTS']['hazard_confusion_matrix_plot_base'] / f'confusion_matrix_counts_{best_overall_model_name}.png'}'")
+        logging.info(f"Confusion Matrix (Counts) plot saved to '{config.PATHS['RESULTS']['hazard_confusion_matrix_plot_base'] / f'confusion_matrix_counts_{best_overall_model_name}.png'}'")
 
         # Plot and save Confusion Matrix (percentages) for the best model on the full dataset
         cm_percent = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis] # Normalize by row (true labels)
@@ -734,9 +734,9 @@ def main() -> None:
         plt.xlabel('Predicted Hazard (1-4)')
         plt.ylabel('True Hazard (1-4)')
         plt.title(f'Confusion Matrix (Percentages) for Best Model ({best_overall_model_name})')
-        plt.savefig(config.PATHS["ARTIFACTS"]["hazard_confusion_matrix_plot_base"] / f"confusion_matrix_percentages_{best_overall_model_name}.png")
+        plt.savefig(config.PATHS["RESULTS"]["hazard_confusion_matrix_plot_base"] / f"confusion_matrix_percentages_{best_overall_model_name}.png")
         plt.close()
-        logging.info(f"Confusion Matrix (Percentages) plot saved to '{config.PATHS['ARTIFACTS']['hazard_confusion_matrix_plot_base'] / f'confusion_matrix_percentages_{best_overall_model_name}.png'}'")
+        logging.info(f"Confusion Matrix (Percentages) plot saved to '{config.PATHS['RESULTS']['hazard_confusion_matrix_plot_base'] / f'confusion_matrix_percentages_{best_overall_model_name}.png'}'")
 
         # --- SHAP Feature Importance Plot for the Best Model ---
         logging.info(f"Generating SHAP feature importance for the best model ({best_overall_model_name})...")
@@ -755,7 +755,7 @@ def main() -> None:
                 final_calibrated_probabilities,
                 list(best_overall_model.classes_), # Pass 0-indexed classes
                 best_overall_model_name,
-                config.PATHS["ARTIFACTS"]["hazard_confusion_matrix_plot_base"] # Save to figures directory
+                config.PATHS["RESULTS"]["hazard_confusion_matrix_plot_base"] # Save to figures directory
             )
         else:
             logging.warning(f"Model {best_overall_model_name} does not support predict_proba. Skipping Reliability Diagrams.")
@@ -767,7 +767,7 @@ def main() -> None:
                 predictions_df, # Use predictions_df which contains calibrated probabilities
                 list(best_overall_model.classes_), # Pass 0-indexed classes
                 best_overall_model_name,
-                config.PATHS["ARTIFACTS"]["hazard_confusion_matrix_plot_base"] # Save to figures directory
+                config.PATHS["RESULTS"]["hazard_confusion_matrix_plot_base"] # Save to figures directory
             )
         else:
             logging.warning(f"Model {best_overall_model_name} does not support predict_proba. Skipping Probability Histograms.")
@@ -778,15 +778,13 @@ def main() -> None:
     logging.info("Model Comparison Summary Table")
     logging.info("="*50)
 
-    summary_data = []
-    for res in all_results:
-        summary_data.append({
-            "Model": res['Model'],
-            "F1 (weighted)": f"{res['F1 Score (weighted)']:.4f}",
-            "MAE": f"{res['MAE']:.4f}",
-            "Quadratic Kappa": f"{res['Quadratic Kappa']:.4f}",
-            "Best Params": str(res['Best Params']) # Convert dict to string for table display
-        })
+    summary_data = [{
+        "Model": res['Model'],
+        "F1 (weighted)": f"{res['F1 Score (weighted)']:.4f}",
+        "MAE": f"{res['MAE']:.4f}",
+        "Quadratic Kappa": f"{res['Quadratic Kappa']:.4f}",
+        "Best Params": str(res['Best Params']) # Convert dict to string for table display
+    } for res in all_results]
     
     summary_df = pd.DataFrame(summary_data)
     logging.info("\n" + summary_df.to_string(index=False))

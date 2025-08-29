@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "avalanche-hazard-forecasting"
 version = "1.0.0"
 authors = [
-  { name="Your Name", email="you@example.com" },
+  { name="Ron Simenhois", email="ron.simenhois@state.co.us" },
 ]
 description = "A comprehensive pipeline for avalanche hazard forecasting using machine learning."
 readme = "README.md"

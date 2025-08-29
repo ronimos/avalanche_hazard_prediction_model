@@ -19,7 +19,6 @@ import folium
 import geopandas as gpd
 import pandas as pd
 import numpy as np
-from shapely.ops import union_all
 
 # Import project-wide configurations for consistent path management
 import config
@@ -34,7 +33,8 @@ def create_prediction_map(prediction_date: Union[str, datetime]):
     The map includes:
     - Basemaps: Street, Topo, and Hybrid Satellite imagery.
     - A choropleth layer for the event likelihood score.
-    - A choropleth layer for the final predicted hazard rating.
+    - A standard choropleth layer for the predicted hazard rating.
+    - A new choropleth layer where hazard color opacity is tied to model confidence.
     - A layer showing only the polygon outlines.
 
     Args:
@@ -128,6 +128,20 @@ def create_prediction_map(prediction_date: Union[str, datetime]):
     m.add_child(likelihood_colormap)
 
     # --- Create Data Layers ---
+    hazard_colors = {
+        1: '#22c55e',  # Green for Low (1)
+        2: '#facc15',  # Yellow for Moderate (2)
+        3: '#f97316',  # Orange for Considerable (3)
+        4: '#ef4444',  # Red for High (4)
+        0: '#e5e7eb'   # Gray for no data
+    }
+    hazard_levels = {
+        1: 'Low', 2: 'Moderate', 3: 'Considerable', 4: 'High', 0: 'No Data'
+    }
+    # Create formatted strings for the tooltip
+    merged_gdf['hazard_level_str'] = merged_gdf['predicted_hazard'].apply(lambda x: hazard_levels.get(int(x), 'Unknown'))
+    merged_gdf['confidence_str'] = (merged_gdf['confidence'] * 100).map('{:.1f}%'.format)
+
     # 1. Polygon Outlines Layer
     outline_layer = folium.FeatureGroup(name='Polygon Outlines', show=False)
     folium.GeoJson(
@@ -159,19 +173,7 @@ def create_prediction_map(prediction_date: Union[str, datetime]):
     ).add_to(likelihood_layer)
     likelihood_layer.add_to(m)
 
-    # 3. Hazard Rating Prediction Layer
-    hazard_colors = {
-        1: '#22c55e',  # Green for Low (1)
-        2: '#facc15',  # Yellow for Moderate (2)
-        3: '#f97316',  # Orange for Considerable (3)
-        4: '#ef4444',  # Red for High (4)
-        0: '#e5e7eb'   # Gray for no data
-    }
-    hazard_levels = {
-        1: 'Low', 2: 'Moderate', 3: 'Considerable', 4: 'High', 0: 'No Data'
-    }
-    merged_gdf['hazard_level_str'] = merged_gdf['predicted_hazard'].apply(lambda x: hazard_levels.get(int(x), 'Unknown'))
-
+    # 3. Hazard Rating Prediction Layer (Standard)
     hazard_layer = folium.FeatureGroup(name='Hazard Rating Prediction', show=True)
     folium.GeoJson(
         merged_gdf,
@@ -179,15 +181,36 @@ def create_prediction_map(prediction_date: Union[str, datetime]):
             'fillColor': hazard_colors.get(int(feature['properties']['predicted_hazard']), '#e5e7eb'),
             'color': 'black',
             'weight': 1,
-            'fillOpacity': 0.5
+            'fillOpacity': 0.6 # A standard opacity
         },
         tooltip=folium.GeoJsonTooltip(
-            fields=['title', 'predicted_hazard', 'hazard_level_str'],
-            aliases=['Region:', 'Predicted Rating:', 'Hazard Level:'],
+            fields=['title', 'predicted_hazard', 'hazard_level_str', 'confidence_str'],
+            aliases=['Region:', 'Predicted Rating:', 'Hazard Level:', 'Confidence:'],
             localize=True
         )
     ).add_to(hazard_layer)
     hazard_layer.add_to(m)
+
+    # 4. NEW: Hazard Rating Prediction Layer (Confidence as Opacity)
+    hazard_confidence_layer = folium.FeatureGroup(name='Hazard Rating (by Confidence)', show=False)
+    folium.GeoJson(
+        merged_gdf,
+        style_function=lambda feature: {
+            'fillColor': hazard_colors.get(int(feature['properties']['predicted_hazard']), '#e5e7eb'),
+            'color': 'black',
+            'weight': 1,
+            # Opacity is now dynamic based on the confidence score
+            # A base opacity of 0.15 ensures even low-confidence zones are visible
+            'fillOpacity': 0.15 + (feature['properties']['confidence'] * 0.75)
+        },
+        tooltip=folium.GeoJsonTooltip(
+            fields=['title', 'predicted_hazard', 'hazard_level_str', 'confidence_str'],
+            aliases=['Region:', 'Predicted Rating:', 'Hazard Level:', 'Confidence:'],
+            localize=True
+        )
+    ).add_to(hazard_confidence_layer)
+    hazard_confidence_layer.add_to(m)
+
 
     # --- Add Layer Control ---
     folium.LayerControl().add_to(m)
@@ -201,5 +224,5 @@ def create_prediction_map(prediction_date: Union[str, datetime]):
 if __name__ == '__main__':
     # Example of how to run this script directly
     # In the main pipeline, the date will be passed from run_prediction.py
-    example_date = "2024-01-14"#datetime.now()
+    example_date = "2024-01-14"
     create_prediction_map(prediction_date=example_date)
