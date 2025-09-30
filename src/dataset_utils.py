@@ -39,11 +39,10 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import requests
-from shapely.geometry import Point
 from tqdm import tqdm
 
 # Local import for the .pro file reader
-from snowpack_reader import SnowpackProfile, read_snowpack
+from snowpack_reader import read_snowpack
 # Import project-wide configurations
 import config
 
@@ -413,7 +412,8 @@ def load_or_fetch_avalanche_data(file_path: Path) -> List[Dict[str, Any]]:
                 )
                 response.raise_for_status()
                 data = response.json()
-                if not data: break
+                if not data: 
+                    break
                 all_records.extend(data)
                 time.sleep(0.1)
                 break
@@ -423,7 +423,8 @@ def load_or_fetch_avalanche_data(file_path: Path) -> List[Dict[str, Any]]:
         else:
             logging.error(f"Failed to fetch page {page} after {config.API_CONFIG['max_retries']} attempts. Stopping.")
             break
-        if not data: break
+        if not data: 
+            break
 
     with file_path.open('w', encoding='utf-8') as f:
         json.dump(all_records, f, indent=2)
@@ -565,16 +566,20 @@ def process_snowpack_data_for_polygon_and_year(polygon_info: dict,
         logging.error(f"Failed to initialize SnowpackProfile reader for {pro_path}: {e}", exc_info=True)
         return None
 
-    if start_date is None: start_date = f"{year}-10-01"
-    if end_date is None: end_date = f"{year+1}-04-30"
+    if start_date is None: 
+        start_date = f"{year}-10-01"
+    if end_date is None: 
+        end_date = f"{year+1}-04-30"
     
     sliced_profile = reader.slice(start_date=start_date, end_date=end_date)
-    if len(sliced_profile) == 0: return None
+    if len(sliced_profile) == 0: 
+        return None
 
     weak_layers_df = sliced_profile.find_layer_by_criteria(
         criteria=config.SNOWPACK_CONFIG["weak_layer_criteria"], search_from='bottom'
     )
-    if weak_layers_df.empty: return None
+    if weak_layers_df.empty: 
+        return None
     
     # Extract gs_difference and hardness_difference from matching_parameters
     # The 'matching_parameters' column contains a dictionary of the criteria matched.
@@ -591,17 +596,19 @@ def process_snowpack_data_for_polygon_and_year(polygon_info: dict,
     slab_results = []
     for date, wl_row in weak_layers_df.iterrows():
         wl_height = wl_row['weak_layer_height']
-        if pd.isna(wl_height): continue
+        if pd.isna(wl_height): 
+            continue
         
         slab_summary = sliced_profile.get_profile_summary(
             parameters_to_calculate=config.SNOWPACK_CONFIG["slab_parameters"],
             start_date=date.strftime('%Y-%m-%d'), end_date=date.strftime('%Y-%m-%d'),
             from_height=wl_height, above_or_below='above'
         )
-        if not slab_summary.empty: slab_results.append(slab_summary)
+        if not slab_summary.empty: 
+            slab_results.append(slab_summary)
 
     # Filter out any potentially empty DataFrames before concatenation to avoid FutureWarning
-    slab_results = [df for df in slab_results if not df.empty]
+    slab_results = [df for df in slab_results if not df.dropna(how='all').empty]
     # Check if slab_results is empty *after* filtering
     if not slab_results:
         return weak_layers_df.reset_index()
@@ -625,10 +632,11 @@ def process_snowpack_data_for_polygon_and_year(polygon_info: dict,
                 start_date=date.strftime('%Y-%m-%d'), end_date=date.strftime('%Y-%m-%d'),
                 from_height=from_height, above_or_below='above'
             )
-            if not summary.empty: upper_snowpack_results.append(summary)
+            if not summary.empty: 
+                upper_snowpack_results.append(summary)
 
     # Filter out any potentially empty DataFrames before concatenation to avoid FutureWarning
-    non_empty_upper_snowpack_results = [df for df in upper_snowpack_results if not df.empty]
+    non_empty_upper_snowpack_results = [df for df in upper_snowpack_results if not df.dropna(how='all').empty]
     # Check if non_empty_upper_snowpack_results is empty *after* filtering
     upper_snowpack_df = pd.concat(non_empty_upper_snowpack_results) if non_empty_upper_snowpack_results else pd.DataFrame()
     
@@ -734,7 +742,8 @@ def process_weather_data_for_polygon_and_year(polygon_info: dict, year: int, wea
     profile_id = f"{int(closest_station['id']):06d}"
     smet_path = config.PATHS["EXTERNAL_DATA"]["snowpack_output"] / str(year) / zone_id / profile_id / f"{profile_id}_res.smet"
 
-    if not smet_path.exists(): return None
+    if not smet_path.exists(): 
+        return None
 
     try:
         weather = read_smet_file(smet_path)
@@ -742,7 +751,8 @@ def process_weather_data_for_polygon_and_year(polygon_info: dict, year: int, wea
         logging.error(f"Failed to process file {smet_path}: {e}", exc_info=True)
         return None
 
-    if weather.empty: return None
+    if weather.empty: 
+        return None
     weather['date'] = pd.to_datetime(weather['date'])
     for col in ['wind_speed', 'wind_dir', 'snow_drift']:
         weather[col] = pd.to_numeric(weather[col], errors='coerce')

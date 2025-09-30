@@ -97,7 +97,7 @@ def create_prediction_map(prediction_date: Union[str, datetime]):
                    <b>Avalanche Hazard Forecast: {prediction_date.strftime('%Y-%m-%d')}</b>
                  </h3>
                  '''
-    m.get_root().html.add_child(folium.Element(title_html))
+    m.get_root().html.add_child(folium.Element(title_html)) 
 
     # --- Add Tile Layers (Basemaps) ---
     folium.TileLayer(

@@ -35,7 +35,9 @@ from datetime import datetime
 # Import the main functions from the other pipeline scripts
 import make_prediction_dataset
 import predict
-import plot_results # Import the plotting script
+from config import IS_LOCAL_DATA_SOURCE
+if not IS_LOCAL_DATA_SOURCE:
+    import plot_results # Import the plotting script
 
 # --- Setup Logging ---
 logging.basicConfig(

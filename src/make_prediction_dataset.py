@@ -142,14 +142,11 @@ def create_prediction_manifest(end_date: datetime, save_manifest: bool=True) -> 
     
     if save_manifest:
         # Construct a date-stamped filename to avoid overwriting other manifests.
-        output_dir = config.PATHS["PROCESSED_DATA"]["download_manifest"].parent
-        date_str = end_date.strftime('%Y-%m-%d')
-        filename = f"prediction_manifest_{date_str}.csv"
-        output_path = output_dir / filename
+        filename = config.PATHS["PROCESSED_DATA"]["prediction_manifest"]
         
         # Save the DataFrame to a CSV file.
-        final_df.to_csv(output_path, index=False)
-        logging.info(f"Prediction manifest saved to '{output_path}'")
+        final_df.to_csv(filename, index=False)
+        logging.info(f"Prediction manifest saved to '{filename}'")
     
     return final_df
 
@@ -203,12 +200,14 @@ def build_prediction_dataset(prediction_date: datetime):
                 start_date=start_date_str,
                 end_date=end_date_str
             )
-            if snowpack_df is not None: yearly_snowpack_dfs.append(snowpack_df)
+            if snowpack_df is not None: 
+                yearly_snowpack_dfs.append(snowpack_df)
                 
             weather_df = dsu.process_weather_data_for_polygon_and_year(
                 polygon_info=polygon_row.to_dict(), year=year, weather_locations_df=snowpack_locations_df
             )
-            if weather_df is not None: yearly_weather_dfs.append(weather_df)
+            if weather_df is not None: 
+                yearly_weather_dfs.append(weather_df)
         
         if not yearly_snowpack_dfs or not yearly_weather_dfs:
             logging.warning(f"No snowpack or weather data could be processed for polygon '{polygon_id}'. Skipping.")
@@ -228,7 +227,11 @@ def build_prediction_dataset(prediction_date: datetime):
 
     if all_polygons_data:
         # Filter out any empty DataFrames from the list before concatenation
-        non_empty_dfs = [df for df in all_polygons_data if not df.empty]
+        non_empty_dfs = [
+            df.dropna(axis=1, how='all') 
+            for df in all_polygons_data 
+            if not df.dropna(how='all').empty
+        ]
         
         if non_empty_dfs:
             final_df = pd.concat(non_empty_dfs, ignore_index=True)

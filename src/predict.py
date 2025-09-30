@@ -45,121 +45,172 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-def predict_avalanche_hazards(prediction_date: Union[str, datetime]):
+def predict_avalanche_hazards(prediction_date: Union[str, datetime]) -> None:
     """
-    Runs the full two-stage prediction pipeline for a given date.
+    Orchestrates the full two-stage prediction process for a given date.
 
     Args:
-        prediction_date (Union[str, datetime]): The date for which to generate
-            predictions, either as a 'YYYY-MM-DD' string or a datetime object.
+        prediction_date (Union[str, datetime]): The date for which to generate predictions,
+                                                accepting either a 'YYYY-MM-DD' string
+                                                or a datetime object.
     """
+    # --- Input Validation and Conversion ---
     if isinstance(prediction_date, str):
-        prediction_date = datetime.strptime(prediction_date, "%Y-%m-%d")
-
-    logging.info(f"--- Starting Prediction for {prediction_date.date()} ---")
-
-    # --- STAGE 1: PREDICT AVALANCHE EVENT PROBABILITY ---
-    try:
-        # Load prediction features
-        prediction_features_path = config.PATHS["PROCESSED_DATA"]["inference_features"]
-        features_df = pd.read_csv(prediction_features_path)
-        features_df['date'] = pd.to_datetime(features_df['date'])
-        
-        # Filter for the specific prediction date
-        predict_df = features_df[features_df['date'].dt.date == prediction_date.date()].copy()
-        if predict_df.empty:
-            logging.warning(f"No prediction data found for {prediction_date.date()}. Aborting.")
+        try:
+            prediction_date = datetime.strptime(prediction_date, "%Y-%m-%d")
+        except ValueError:
+            logging.error(f"Invalid date string format: '{prediction_date}'. Please use YYYY-MM-DD.")
             return
-
-        # Load event model artifacts
-        event_model = joblib.load(config.PATHS["ARTIFACTS"]["event_model"])
-        event_scaler = joblib.load(config.PATHS["ARTIFACTS"]["event_scaler"])
-        with open(config.PATHS["ARTIFACTS"]["event_model_params"], 'r') as f:
-            event_params = json.load(f)
-        with open(config.PATHS["ARTIFACTS"]["event_final_features"], 'r') as f:
-            event_features = json.load(f)
-
-    except FileNotFoundError as e:
-        logging.error(f"Missing artifact for Stage 1 (Event Model): {e}. Cannot proceed.")
+    elif not isinstance(prediction_date, datetime):
+        logging.error(f"Invalid type for prediction_date: {type(prediction_date)}. Must be a datetime object or a 'YYYY-MM-DD' string.")
         return
 
-    X_event = predict_df[event_features]
-    X_event_scaled = event_scaler.transform(X_event)
+    logging.info(f"Starting avalanche hazard prediction for date: {prediction_date.date()}")
 
-    # Generate raw scores and adjusted scores
-    raw_scores = event_model.predict_proba(X_event_scaled)[:, 1]
-    optimal_threshold = event_params.get('best_threshold', 0.5)
-    
-    adjusted_scores = np.zeros_like(raw_scores)
-    low_mask = raw_scores < optimal_threshold
-    high_mask = ~low_mask
-    
-    if np.any(low_mask):
-        adjusted_scores[low_mask] = 0.5 * (raw_scores[low_mask] / optimal_threshold) if optimal_threshold > 0 else 0.0
-    if np.any(high_mask):
-        denominator = (1.0 - optimal_threshold)
-        adjusted_scores[high_mask] = 0.5 + 0.5 * ((raw_scores[high_mask] - optimal_threshold) / denominator) if denominator > 0 else 1.0
-
-    predict_df['raw_score'] = raw_scores
-    predict_df['adjusted_score'] = adjusted_scores
-    predict_df['predicted_label'] = (adjusted_scores >= 0.5).astype(int)
-
-    # --- STAGE 2: PREDICT FINAL HAZARD RATING (WITH CALIBRATION) ---
     try:
-        # Load hazard model artifacts
+        # --- 1. Load All Necessary Artifacts ---
+        logging.info("Loading trained models and artifacts...")
+
+        # Event model artifacts
+        event_model = joblib.load(config.PATHS["ARTIFACTS"]["event_model"])
+        event_scaler = joblib.load(config.PATHS["ARTIFACTS"]["event_scaler"])
+        with open(config.PATHS["ARTIFACTS"]["event_final_features"], 'r') as f:
+            event_features = json.load(f)
+        with open(config.PATHS["ARTIFACTS"]["event_model_params"], 'r') as f:
+            event_params = json.load(f)
+        event_threshold = event_params.get('best_threshold', 0.5)
+
+        # Hazard model artifacts
         hazard_model = joblib.load(config.PATHS["ARTIFACTS"]["hazard_model"])
-        hazard_calibrators = joblib.load(config.PATHS["ARTIFACTS"]["hazard_calibrators"])
         hazard_scaler = joblib.load(config.PATHS["ARTIFACTS"]["hazard_scaler"])
+        hazard_calibrators = joblib.load(config.PATHS["ARTIFACTS"]["hazard_calibrators"])
         with open(config.PATHS["ARTIFACTS"]["hazard_final_features"], 'r') as f:
             hazard_features = json.load(f)
 
+        # --- 2. Load Inference Features ---
+        logging.info(f"Loading inference features for {prediction_date.date()}...")
+        prediction_features_path = config.PATHS["PROCESSED_DATA"]["inference_features"]
+        inference_df = pd.read_csv(prediction_features_path)
+        inference_df['date'] = pd.to_datetime(inference_df['date'])
+
+        # Filter for the specific prediction date
+        daily_features_df = inference_df[inference_df['date'].dt.date == prediction_date.date()].copy()
+        if daily_features_df.empty:
+            logging.warning(f"No inference features found for {prediction_date.date()}. Aborting prediction.")
+            return
+
+        polygons_for_prediction = daily_features_df['polygon']
+
+        # --- 3. Stage 1: Predict Avalanche Event Likelihood ---
+        logging.info("Executing Stage 1: Predicting event likelihood...")
+        X_event = daily_features_df[event_features]
+        X_event_scaled = event_scaler.transform(X_event)
+        
+        raw_scores = event_model.predict_proba(X_event_scaled)[:, 1]
+
+        # Apply the same threshold adjustment logic from training
+        adjusted_scores = np.zeros_like(raw_scores)
+        low_mask = raw_scores < event_threshold
+        high_mask = ~low_mask
+        denominator = 1.0 - event_threshold
+        
+        if np.any(low_mask):
+            adjusted_scores[low_mask] = 0.5 * (raw_scores[low_mask] / event_threshold) if event_threshold > 0 else 0
+        if np.any(high_mask) and denominator > 0:
+            adjusted_scores[high_mask] = 0.5 + 0.5 * ((raw_scores[high_mask] - event_threshold) / denominator)
+
+        # --- 4. Stage 2: Predict Hazard Rating ---
+        logging.info("Executing Stage 2: Predicting hazard rating...")
+        # Prepare feature set for hazard model by adding the event score
+        X_hazard_base = daily_features_df.drop(columns=['date', 'polygon'], errors='ignore')
+        X_hazard_base['adjusted_score'] = adjusted_scores
+        
+        # Ensure column order matches the training features
+        X_hazard = X_hazard_base[hazard_features]
+        X_hazard_scaled_np = hazard_scaler.transform(X_hazard)
+        X_hazard_scaled = pd.DataFrame(X_hazard_scaled_np, columns=hazard_features)
+        
+        # Get raw (uncalibrated) probabilities from the hazard model
+        raw_hazard_probs = hazard_model.predict_proba(X_hazard_scaled)
+
+        # --- 5. Apply Calibration ---
+        logging.info("Applying Isotonic Regression calibration...")
+        calibrated_probs = np.zeros_like(raw_hazard_probs)
+        for i, calibrator in enumerate(hazard_calibrators):
+            calibrated_probs[:, i] = calibrator.predict(raw_hazard_probs[:, i])
+
+        # Re-normalize probabilities to ensure they sum to 1
+        prob_sum = calibrated_probs.sum(axis=1)[:, np.newaxis]
+        final_calibrated_probs = calibrated_probs / prob_sum
+        
+        # Determine final prediction and confidence
+        predicted_hazard_0_indexed = np.argmax(final_calibrated_probs, axis=1)
+        confidence = np.max(final_calibrated_probs, axis=1)
+        
+        # Convert prediction back to 1-indexed hazard level
+        predicted_hazard_1_indexed = predicted_hazard_0_indexed + 1
+
+        # --- 6. Assemble and Save Final Predictions ---
+        logging.info("Assembling and saving final prediction files...")
+        final_predictions_df = pd.DataFrame({
+            'date': prediction_date,
+            'polygon': polygons_for_prediction,
+            'predicted_hazard': predicted_hazard_1_indexed,
+            'confidence': confidence,
+        })
+        # Add event score and individual calibrated probabilities
+        final_predictions_df['avalanche_event_propability'] = adjusted_scores
+        for i, class_label_0 in enumerate(hazard_model.classes_):
+            class_label_1 = class_label_0 + 1
+            final_predictions_df[f'hazard_{class_label_1}_prob_calibrated'] = final_calibrated_probs[:, i]
+
+        # Save to standard CSV
+        csv_output_path = config.PATHS["RESULTS"]["hazard_predictions_csv"]
+        final_predictions_df.to_csv(csv_output_path, index=False)
+        logging.info(f"Standard CSV predictions saved to '{csv_output_path}'")
+        
+        # --- 7. Create and Save Custom JSON Output (Model Predictions Only) ---
+        logging.info("Creating custom JSON output with model predictions only...")
+        
+        # Start with the final predictions DataFrame
+        json_data_df = final_predictions_df.copy()
+        
+        # Rename probability columns to match the desired JSON format
+        prob_rename_map = {
+            f'hazard_{i}_prob_calibrated': f'calibrated_proba_hazard_{i}'
+            for i in range(1, len(hazard_model.classes_) + 1)
+        }
+        json_data_df.rename(columns=prob_rename_map, inplace=True)
+        
+        # Define the exact columns needed for the JSON output (model predictions only)
+        json_feature_cols = ['polygon', 'predicted_hazard', 'confidence', 'avalanche_event_propability'] + list(prob_rename_map.values())
+
+        # Convert the relevant part of the DataFrame to a list of dictionaries
+        features_list = json_data_df[json_feature_cols].to_dict(orient='records')
+        
+        # Construct the final JSON object
+        json_output = {
+            "type": "polyGeom",
+            "time": prediction_date.strftime("%Y-%m-%d"),
+            "features": features_list
+        }
+        
+        # Save the JSON file
+        json_output_path = config.PATHS["ARTIFACTS"]["all_predictions"]
+        with open(json_output_path, 'w') as f:
+            json.dump(json_output, f, indent=4)
+        logging.info(f"Custom JSON predictions saved to '{json_output_path}'")
+
     except FileNotFoundError as e:
-        logging.error(f"Missing artifact for Stage 2 (Hazard Model): {e}. Cannot proceed.")
-        return
+        logging.error(f"A required model artifact or data file was not found: {e}. Please run the full training pipeline first.", exc_info=True)
+    except Exception as e:
+        logging.error(f"An unexpected error occurred during prediction: {e}", exc_info=True)
 
-    X_hazard = predict_df[hazard_features]
-    X_hazard_scaled = hazard_scaler.transform(X_hazard)
+    logging.info(f"Prediction process for {prediction_date.date()} completed.")
 
-    # Get raw probabilities from the base model
-    raw_hazard_probs = hazard_model.predict_proba(X_hazard_scaled)
-
-    # Apply the trained calibrators to the raw probabilities
-    logging.info("Applying Isotonic Regression calibrators to raw probabilities...")
-    calibrated_probs = np.zeros_like(raw_hazard_probs)
-    n_classes = raw_hazard_probs.shape[1]
-    for i in range(n_classes):
-        # Ensure calibrators list is long enough
-        if i < len(hazard_calibrators):
-            calibrated_probs[:, i] = hazard_calibrators[i].predict(raw_hazard_probs[:, i])
-        else:
-            logging.warning(f"Mismatch between number of classes ({n_classes}) and calibrators ({len(hazard_calibrators)}). Using raw probability for class {i}.")
-            calibrated_probs[:, i] = raw_hazard_probs[:, i]
-
-    # Re-normalize the probabilities to ensure they sum to 1
-    prob_sum = calibrated_probs.sum(axis=1, keepdims=True)
-    prob_sum[prob_sum == 0] = 1 # Avoid division by zero
-    final_probs = calibrated_probs / prob_sum
-
-    # The final prediction is the class with the highest *calibrated* probability
-    final_prediction = np.argmax(final_probs, axis=1)
-    # The confidence is the probability of that predicted class
-    confidence = np.max(final_probs, axis=1)
-
-    # --- 6. Save Results ---
-    output_df = predict_df[['date', 'polygon']].copy()
-    output_df['predicted_hazard'] = final_prediction + 1 # Convert back to 1-4 scale
-    output_df['confidence'] = confidence # Add the confidence score
-    output_df['event_adjusted_score'] = predict_df['adjusted_score']
-    
-    # Add individual calibrated probabilities for each hazard level
-    for i in range(n_classes):
-        output_df[f'hazard_{i+1}_prob_calibrated'] = final_probs[:, i]
-
-    output_path = config.PATHS["ARTIFACTS"]["hazard_predictions_csv"]
-    output_df.to_csv(output_path, index=False)
-    logging.info(f"Final calibrated predictions saved to: {output_path}")
-    logging.info("--- Prediction Pipeline Finished Successfully ---")
-
+# =============================================================================
+# 3. SCRIPT EXECUTION BLOCK
+# =============================================================================
 
 if __name__ == "__main__":
     # Example of how to run this script directly

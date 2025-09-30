@@ -30,6 +30,7 @@ Author: Ron Simenhois
 import os
 import logging
 from pathlib import Path
+from datetime import datetime
 
 # --- Setup Logging ---
 # Configure logging to be used throughout the project.
@@ -81,6 +82,8 @@ RESULTS_DIR.mkdir(exist_ok=True)
 ARTIFACTS_DIR = ROOT_DIR / "artifacts"
 ARTIFACTS_DIR.mkdir(exist_ok=True)
 
+# Create a timestamp for versioning artifacts
+TIMESTAMP = datetime.now().strftime("%Y%m%d")
 
 # --- FILE PATHS ---
 # Central repository for all file paths used across the project.
@@ -103,6 +106,7 @@ PATHS = {
     "PROCESSED_DATA": {
         "daily_avalanche_data": DATA_DIR / "processed" / "daily_avalanche_data.csv",
         "download_manifest": DATA_DIR / "processed" / "snowpack_download_manifest.csv",
+        "prediction_manifest": DATA_DIR / "processed" / "prediction_manifest.csv",
         "training_features": DATA_DIR / "processed" / "training_features.csv",
         "training_targets": DATA_DIR / "processed" / "training_targets.csv",
         "inference_features": DATA_DIR / "processed" / "inference_features.csv",
@@ -131,7 +135,8 @@ PATHS = {
         "event_results_summary": RESULTS_DIR / "avalanche_event_model_performance_summary.csv",
         "event_shap_values": RESULTS_DIR / "avalanche_event_shap_feature_importance.csv",
         "event_feature_names": MODELS_DIR / "avalanche_event_shap_feature_names.csv",
-        "all_predictions": RESULTS_DIR / "model_predictions.json",
+        "all_predictions": Path(f"/home/caic/www/snowpack/json/snowpack/{TIMESTAMP}.json") if IS_LOCAL_DATA_SOURCE else                                   
+                                      RESULTS_DIR / f"model_predictions_{TIMESTAMP}.json",
 
         # Avalanche Hazard Model Artifacts
         "hazard_model_params": MODELS_DIR / "avalanche_hazard_best_model_params.json",
@@ -157,7 +162,7 @@ PATHS = {
         "hazard_confusion_matrix_plot_base": RESULTS_DIR / "figures", # Base path for confusion matrix plots
 
     },
-}
+}   
 
 
 # --- API CONFIGURATION ---

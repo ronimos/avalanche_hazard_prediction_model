@@ -32,7 +32,6 @@ source = { editable = "." }
 dependencies = [
     { name = "bottleneck" },
     { name = "branca" },
-    { name = "cupy" },
     { name = "folium" },
     { name = "geopandas" },
     { name = "imbalanced-learn" },
@@ -78,7 +77,6 @@ requires-dist = [
     { name = "bottleneck", specifier = ">=1.3.0" },
     { name = "branca", specifier = ">=0.8.1" },
     { name = "branca", marker = "extra == 'visualization'", specifier = ">=0.7.0" },
-    { name = "cupy", specifier = ">=13.6.0" },
     { name = "cupy-cuda12x", marker = "extra == 'gpu'", specifier = ">=12.0.0" },
     { name = "folium", specifier = ">=0.20.0" },
     { name = "folium", marker = "extra == 'visualization'", specifier = ">=0.15.0" },
@@ -521,16 +519,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/3c/37/21972a15834d90bfbfb009b9d004779bd5a07a0ec0234e5ba8f64d5736f4/contourpy-1.3.3-pp311-pypy311_pp73-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:5ed3657edf08512fc3fe81b510e35c2012fbd3081d2e26160f27ca28affec989", size = 329207, upload-time = "2025-07-26T12:02:57.468Z" },
     { url = "https://files.pythonhosted.org/packages/0c/58/bd257695f39d05594ca4ad60df5bcb7e32247f9951fd09a9b8edb82d1daa/contourpy-1.3.3-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:3d1a3799d62d45c18bafd41c5fa05120b96a28079f2393af559b843d1a966a77", size = 225315, upload-time = "2025-07-26T12:02:58.801Z" },
 ]
-
-[[package]]
-name = "cupy"
-version = "13.6.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "fastrlock" },
-    { name = "numpy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/a7/95/c2c7b5dca22dd7409308d076c33c681f810efd77e2b62e5107027cc98597/cupy-13.6.0.tar.gz", hash = "sha256:3cba30ae3dd32b5d5c6536e710cb98015227cd4ba83c46b3f1825a7ae55b6667", size = 3319720, upload-time = "2025-08-18T08:33:04.503Z" }
 
 [[package]]
 name = "cupy-cuda12x"
