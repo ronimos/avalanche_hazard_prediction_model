@@ -51,7 +51,6 @@ except (ImportError, RuntimeError):
 
 import pandas as pd
 import xarray as xr
-from tqdm import tqdm
 import numpy as np
 
 pd.set_option('display.max_columns', None)
@@ -200,7 +199,8 @@ class SnowpackProfile:
             with file_path.open('r', encoding='utf-8', errors='ignore') as f:
                 for i, line in enumerate(f):
                     line = line.strip()
-                    if not line: continue
+                    if not line: 
+                        continue
 
                     if line.startswith('[') and line.endswith(']'):
                         section = line
@@ -255,7 +255,8 @@ class SnowpackProfile:
         valid_indices = ~pd.isna(timestamps)
         profiles = [p for i, p in enumerate(profiles) if valid_indices[i]]
         timestamps = timestamps.dropna()
-        if not profiles: return
+        if not profiles: 
+            return
 
         all_params = sorted({key for p in profiles for key in p if key != 'timestamp'})
         max_layers = max((len(p.get('height', [])) for p in profiles), default=0)
@@ -271,7 +272,7 @@ class SnowpackProfile:
 
         if GPU_AVAILABLE:
             for param, (dims, arr) in data_vars.items():
-                data_vars[param] = (dims, xp.asarray(arr))
+                data_vars[param] = (dims, xp.asarray(arr)) # type: ignore
         
         self.data = xr.Dataset(data_vars, coords={'timestamp': timestamps, 'layer_index': np.arange(max_layers)})
         self.data = self.data.sortby('timestamp')
@@ -285,13 +286,15 @@ class SnowpackProfile:
     def _is_new_timestamp_line(self, line: str) -> Tuple[bool, Optional[str]]:
         """Helper function to check if a data line marks the beginning of a new profile."""
         parts = line.split(',', 1)
-        if len(parts) < 2: raise IndexError("Line does not contain a comma.")
+        if len(parts) < 2: 
+            raise IndexError("Line does not contain a comma.")
         return (True, parts[1]) if parts[0] == "0500" else (False, None)
 
     def _parse_data_line(self, line: str, current_ts_data: Dict):
         """Helper function to parse a single data line containing layer data."""
         parts = line.split(',')
-        if len(parts) < 3: return # Not enough data to be a valid parameter line
+        if len(parts) < 3: 
+            return # Not enough data to be a valid parameter line
         if (param_name := PARAM_CODES.get(parts[0])):
             current_ts_data[param_name] = np.array(parts[2:], dtype=float)
 
@@ -319,7 +322,8 @@ class SnowpackProfile:
         Calculates the `rc_flat` stability parameter for all layers and profiles
         in a single, efficient vectorized operation and adds it to the dataset.
         """
-        if self.data is None: return
+        if self.data is None: 
+            return
         required_vars = {'density', 'grain_size', 'shear_strength', 'height'}
         if not required_vars.issubset(self.data.data_vars):
             logger.warning("Skipping rc_flat calculation due to missing variables.")
@@ -401,7 +405,8 @@ class SnowpackProfile:
             specified date range. If no data is found in the range, it returns
             a new instance with an empty data attribute.
         """
-        if self.data is None or self.data.timestamp.size == 0: return self
+        if self.data is None or self.data.timestamp.size == 0: 
+            return self
         timestamps = pd.to_datetime(self.data.timestamp.values).normalize()
         start_mask = timestamps >= pd.to_datetime(start_date).normalize() if start_date else np.ones(len(timestamps), dtype=bool)
         end_mask = timestamps <= pd.to_datetime(end_date).normalize() if end_date else np.ones(len(timestamps), dtype=bool)
@@ -491,7 +496,9 @@ class SnowpackProfile:
         base_h = from_height if (from_height is not None and above_or_below == 'above') else 0
         if not profile_layers.empty:
             first_layer_index = profile_layers.index[0]
-            first_layer_height = profile_layers.loc[first_layer_index, 'height']
+            
+            # Explicitly convert the value from the DataFrame to a float
+            first_layer_height = float(profile_layers.loc[first_layer_index, 'height']) # type: ignore # Ensured to be float
             profile_layers.loc[first_layer_index, 'thickness'] = first_layer_height - base_h
             
         return profile_layers
@@ -501,25 +508,32 @@ class SnowpackProfile:
         summary_data = {}
         for name, calc in parameters.items():
             if callable(calc):
-                try: summary_data[name] = calc(profile_layers)
-                except Exception: summary_data[name] = np.nan
+                try: 
+                    summary_data[name] = calc(profile_layers)
+                except Exception: 
+                    summary_data[name] = np.nan
                 continue
 
             param, calc_type = (calc if isinstance(calc, tuple) else (name.split('-')[0], calc))
-            if not param or param not in profile_layers: continue
+            if not param or param not in profile_layers: 
+                continue
 
             series = profile_layers[param].dropna()
-            if series.empty: continue
-            if param == 'hand_hardness': series = series.abs()
+            if series.empty: 
+                continue
+            if param == 'hand_hardness': 
+                series = series.abs()
 
             if calc_type == 'min':
                 idx = series.idxmin()
                 summary_data[name] = series.min()
-                if 'height' in profile_layers.columns: summary_data[f"{name}-height"] = profile_layers.loc[idx, 'height']
+                if 'height' in profile_layers.columns: 
+                    summary_data[f"{name}-height"] = profile_layers.loc[idx, 'height']
             elif calc_type == 'max':
                 idx = series.idxmax()
                 summary_data[name] = series.max()
-                if 'height' in profile_layers.columns: summary_data[f"{name}-height"] = profile_layers.loc[idx, 'height']
+                if 'height' in profile_layers.columns: 
+                    summary_data[f"{name}-height"] = profile_layers.loc[idx, 'height']
             elif calc_type == 'mean':
                 summary_data[name] = series.mean()
             elif calc_type == 'weighted_mean':
@@ -625,11 +639,14 @@ class SnowpackProfile:
                     continue
 
                 param, calc_type = (calc if isinstance(calc, tuple) else (name.split('-')[0], calc))
-                if not param or param not in profile_layers: continue
+                if not param or param not in profile_layers: 
+                    continue
 
                 series = profile_layers[param].dropna()
-                if series.empty: continue
-                if param == 'hand_hardness': series = series.abs()
+                if series.empty: 
+                    continue
+                if param == 'hand_hardness': 
+                    series = series.abs()
                 
                 if calc_type == 'min':
                     summary_row[name] = series.min()
@@ -674,24 +691,32 @@ class SnowpackProfile:
             return pd.Series(False, index=df.index)
 
         op, value_str = match.groups()
-        try: value = float(value_str)
+        try: 
+            value = float(value_str)
         except ValueError:
             logger.warning(f"Could not convert value '{value_str}' to float.")
             return pd.Series(False, index=df.index)
 
-        if op == '<': return df[param] < value
-        if op == '>': return df[param] > value
-        if op == '<=': return df[param] <= value
-        if op == '>=': return df[param] >= value
-        if op == '==': return df[param] == value
-        if op == '!=': return df[param] != value
+        if op == '<': 
+            return df[param] < value
+        if op == '>': 
+            return df[param] > value
+        if op == '<=': 
+            return df[param] <= value
+        if op == '>=': 
+            return df[param] >= value
+        if op == '==': 
+            return df[param] == value
+        if op == '!=': 
+            return df[param] != value
         
         logger.warning(f"Unsupported operator '{op}' in criteria.")
         return pd.Series(False, index=df.index)
 
     def _find_best_layer(self, daily_profile: pd.DataFrame, criteria: Dict[str, str], search_from: str) -> pd.Series:
         """Finds the single best-matching layer in a daily profile based on weighted criteria."""
-        if daily_profile.empty: return pd.Series(dtype=object)
+        if daily_profile.empty: 
+            return pd.Series(dtype=object)
 
         if 'depth' in criteria and 'height' in daily_profile.columns:
             daily_profile['depth'] = daily_profile['height'].max() - daily_profile['height']
@@ -711,7 +736,8 @@ class SnowpackProfile:
         max_score = score.max()
         if max_score == 0 or pd.isna(max_score):
             result = {'height': np.nan, 'matching_criteria_count': 0, 'matching_parameters': {}}
-            for param in criteria: result[param] = np.nan
+            for param in criteria: 
+                result[param] = np.nan
             return pd.Series(result)
 
         best_matching_layers = daily_profile[score == max_score]

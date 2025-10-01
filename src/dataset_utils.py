@@ -40,6 +40,8 @@ import numpy as np
 import pandas as pd
 import requests
 from tqdm import tqdm
+import datetime
+
 
 # Local import for the .pro file reader
 from snowpack_reader import read_snowpack
@@ -154,9 +156,11 @@ def get_polygon_centroids(file_path: Path, projected_crs: str) -> Optional[gpd.G
         if gdf.empty:
             logging.warning("No valid Polygon or MultiPolygon geometries found.")
             return gdf
-
+    
         # Project to a suitable CRS for accurate centroid calculation
         projected_centroids = gdf.geometry.to_crs(projected_crs).centroid
+        if gdf.crs is None:
+            raise ValueError("The input GeoJSON file is missing Coordinate Reference System (CRS) information.")
         # Convert the centroid back to the original CRS (e.g., WGS84) for lat/lon
         gdf['centroid'] = projected_centroids.to_crs(gdf.crs)
         gdf['centroid_lat'] = gdf['centroid'].y
@@ -201,8 +205,8 @@ def find_closest_stations(points_df: pd.DataFrame, stations_df: pd.DataFrame) ->
     closest_indices = np.argmin(distance_matrix_km, axis=1)
 
     return pd.DataFrame({
-        'st_id': stations_df.loc[closest_indices, 'id'].values,
-        'zone': stations_df.loc[closest_indices, 'zone'].values
+        'st_id': stations_df.loc[closest_indices, 'id'].to_numpy(), # type: ignore
+        'zone': stations_df.loc[closest_indices, 'zone'].to_numpy() # type: ignore
     }, index=points_df.index)
 
 def create_download_manifest() -> Optional[pd.DataFrame]:
@@ -236,7 +240,9 @@ def create_download_manifest() -> Optional[pd.DataFrame]:
         danger_path = config.PATHS["RAW_DATA"]["danger_ratings"]
         locations_path = config.PATHS["RAW_DATA"]["snowpack_locations"]
 
-        centroids_df = get_polygon_centroids(polygons_path, config.PROCESSING_CONFIG["geoprojection_epsg"])
+        if (centroids_df := get_polygon_centroids(polygons_path, config.PROCESSING_CONFIG["geoprojection_epsg"])) is None:
+            logging.critical("Failed to load or process polygon centroids. Cannot create manifest.")
+            return None
         danger_df = pd.read_csv(danger_path)
         snowpack_locations = pd.read_csv(locations_path)
     except (FileNotFoundError, KeyError) as e:
@@ -548,7 +554,14 @@ def process_snowpack_data_for_polygon_and_year(polygon_info: dict,
     """
     polygon_name = polygon_info['title']
     dists = haversine_distance(polygon_info['centroid_lat'], polygon_info['centroid_lon'], snowpack_locations_df, 'lat', 'lon')
-    closest_station = snowpack_locations_df.loc[dists.idxmin()]
+    closest_station_row = snowpack_locations_df.loc[dists.idxmin()]
+    
+    # Handle the possibility of .loc returning a DataFrame due to duplicate indexes.
+    # This ensures `closest_station` is always a Series (a single row).
+    if isinstance(closest_station_row, pd.DataFrame):
+        closest_station = closest_station_row.iloc[0]
+    else:
+        closest_station = closest_station_row
     zone_id = f"zone{int(closest_station['zone']):03d}"
     profile_id = f"{int(closest_station['id']):06d}"
     pro_path = config.PATHS["EXTERNAL_DATA"]["snowpack_output"] / str(year) / zone_id / profile_id / f"{profile_id}_res.pro"
@@ -595,6 +608,9 @@ def process_snowpack_data_for_polygon_and_year(polygon_info: dict,
     
     slab_results = []
     for date, wl_row in weak_layers_df.iterrows():
+        # This check verifies the type and acts as a guard for Pylance.
+        if not isinstance(date, (datetime.date, datetime.datetime)):
+            continue  # Skip if the index item is not a date for some reason
         wl_height = wl_row['weak_layer_height']
         if pd.isna(wl_height): 
             continue
@@ -624,6 +640,9 @@ def process_snowpack_data_for_polygon_and_year(polygon_info: dict,
     
     upper_snowpack_results = []
     for date, row in general_summary_df.iterrows():
+        # This check verifies the type and acts as a guard for Pylance.
+        if not isinstance(date, (datetime.date, datetime.datetime)):
+            continue  # Skip if the index item is not a date for some reason
         total_height = row['height-max']
         if pd.notna(total_height) and total_height >= 15:
             from_height = total_height - 15
@@ -682,7 +701,7 @@ def process_snowpack_data_for_polygon_and_year(polygon_info: dict,
             for window in [2, 3, 4, 5, 6, 9]: # Added 7-day window
                 new_cols[f'{feat}_mean_{window}d'] = final_df[feat].rolling(window=window, min_periods=1).mean()
                 new_cols[f'{feat}_std_{window}d'] = final_df[feat].rolling(window=window, min_periods=1).std()
-                new_cols[f'{feat}_trend_{window}d'] = final_df[feat].diff(periods=window).fillna(0) / window
+                new_cols[f'{feat}_trend_{window}d'] = final_df[feat].diff(periods=window).fillna(0) / window # type: ignore
     
     if new_cols:
         final_df = pd.concat([final_df, pd.DataFrame(new_cols)], axis=1)
@@ -735,9 +754,12 @@ def process_weather_data_for_polygon_and_year(polygon_info: dict, year: int, wea
         df = pd.DataFrame(data, columns=columns).rename(columns={'timestamp': 'date', 'VW': 'wind_speed', 'DW': 'wind_dir', 'VW_drift': 'snow_drift'})  
         return df[['date', 'wind_speed', 'wind_dir', 'snow_drift']]       
     
-    polygon_name = polygon_info['title']
     dists = haversine_distance(polygon_info['centroid_lat'], polygon_info['centroid_lon'], weather_locations_df, 'lat', 'lon')
-    closest_station = weather_locations_df.loc[dists.idxmin()]
+    closest_station_row = weather_locations_df.loc[dists.idxmin()]
+    if isinstance(closest_station_row, pd.DataFrame):
+        closest_station = closest_station_row.iloc[0]
+    else:
+        closest_station = closest_station_row
     zone_id = f"zone{int(closest_station['zone']):03d}"
     profile_id = f"{int(closest_station['id']):06d}"
     smet_path = config.PATHS["EXTERNAL_DATA"]["snowpack_output"] / str(year) / zone_id / profile_id / f"{profile_id}_res.smet"
@@ -768,7 +790,7 @@ def process_weather_data_for_polygon_and_year(polygon_info: dict, year: int, wea
             for window in [2, 3, 4, 5, 6, 9]: # Added 7-day window
                 new_cols[f'{feat}_mean_{window}d'] = weather[feat].rolling(window=window, min_periods=1).mean()
                 new_cols[f'{feat}_std_{window}d'] = weather[feat].rolling(window=window, min_periods=1).std()
-                new_cols[f'{feat}_trend_{window}d'] = weather[feat].diff(periods=window).fillna(0) / window
+                new_cols[f'{feat}_trend_{window}d'] = weather[feat].diff(periods=window).fillna(0) / window # type: ignore
     
     if new_cols:
         weather = pd.concat([weather, pd.DataFrame(new_cols)], axis=1)
