@@ -23,6 +23,7 @@ and `data/external` and write to `data/processed`.
 import logging
 import pandas as pd
 from tqdm import tqdm
+import numpy as np # Import numpy for calculations
 
 # Import shared functions and project-wide configurations
 import dataset_utils as dsu
@@ -64,11 +65,6 @@ def main_pipeline():
         config.PATHS["PROCESSED_DATA"]["daily_avalanche_data"]
     )
     
-        # Add a check here to handle the case where avalanche processing fails
-    if daily_avalanche_summary_df is None:
-        logging.error("Failed to process daily avalanche data. Aborting pipeline.")
-        return  # Stop the function if the data is missing
-
     all_hazard_data_df = pd.read_csv(config.PATHS["RAW_DATA"]["danger_ratings"])
     danger_cols = ['atl', 'ntl', 'btl']
     all_hazard_data_df['hazard'] = all_hazard_data_df[danger_cols].max(axis=1)
@@ -77,7 +73,7 @@ def main_pipeline():
     snowpack_locations_df = pd.read_csv(config.PATHS["RAW_DATA"]["snowpack_locations"])
 
     # --- Step 4: Process Data for Each Polygon and Merge ---
-    unique_polygons = manifest_df[['polygon', 'title', 'centroid_lat', 'centroid_lon']].drop_duplicates('polygon').reset_index(drop=True)
+    unique_polygons = manifest_df[['polygon', 'polygon_number', 'centroid_lat', 'centroid_lon']].drop_duplicates('polygon').reset_index(drop=True)
     
     if daily_avalanche_summary_df is not None and not daily_avalanche_summary_df.empty:
         polygon_counts = daily_avalanche_summary_df.groupby('polygon')['num_daily_avalanches'].sum()
@@ -89,7 +85,7 @@ def main_pipeline():
     all_polygons_data = []
     for _, polygon_row in tqdm(unique_polygons.iterrows(), desc="Processing All Polygons", total=len(unique_polygons)):
         polygon_id = str(int(polygon_row['polygon']))
-        polygon_name = polygon_row['title']
+        polygon_name = polygon_row['polygon_number']
         
         logging.info("-" * 50)
         logging.info(f"Processing data for polygon: '{polygon_name}' (ID: {polygon_id})")
@@ -99,14 +95,12 @@ def main_pipeline():
             snowpack_year_df = dsu.process_snowpack_data_for_polygon_and_year(
                 polygon_info=polygon_row.to_dict(), year=year, snowpack_locations_df=snowpack_locations_df
             )
-            if snowpack_year_df is not None: 
-                yearly_snowpack_dfs.append(snowpack_year_df)
+            if snowpack_year_df is not None: yearly_snowpack_dfs.append(snowpack_year_df)
                 
             weather_year_df = dsu.process_weather_data_for_polygon_and_year(
                 polygon_info=polygon_row.to_dict(), year=year, weather_locations_df=snowpack_locations_df
             )
-            if weather_year_df is not None: 
-                yearly_weather_dfs.append(weather_year_df)   
+            if weather_year_df is not None: yearly_weather_dfs.append(weather_year_df)   
                 
         if not yearly_snowpack_dfs or not yearly_weather_dfs:
             logging.warning(f"No snowpack or weather data for polygon '{polygon_name}'. Skipping.")

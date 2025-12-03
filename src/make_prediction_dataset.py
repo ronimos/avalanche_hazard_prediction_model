@@ -114,8 +114,10 @@ def create_prediction_manifest(end_date: datetime, save_manifest: bool=True) -> 
     for _, polygon_row in polygons_with_stations.iterrows():
         manifest_list.extend([
             {
-                'date': date, 'polygon': int(polygon_row['title']),
-                'title': int(polygon_row['title']), 'st_id': int(polygon_row['st_id']),
+                'date': date, 
+                'polygon': int(polygon_row['polygon_number']),
+                'title': int(polygon_row['polygon_number']), 
+                'st_id': int(polygon_row['st_id']),
                 'zone': int(polygon_row['zone']), 'centroid_lat': polygon_row['centroid_lat'],
                 'centroid_lon': polygon_row['centroid_lon']
             }
@@ -176,7 +178,7 @@ def build_prediction_dataset(prediction_date: datetime):
         logging.info("Skipping data download because a local data source is being used.")
     
     snowpack_locations_df = pd.read_csv(config.PATHS["RAW_DATA"]["snowpack_locations"])
-    unique_polygons = manifest_df[['polygon', 'title', 'centroid_lat', 'centroid_lon']].drop_duplicates('polygon').reset_index(drop=True)
+    unique_polygons = manifest_df[['polygon', 'zone', 'centroid_lat', 'centroid_lon']].drop_duplicates('polygon').reset_index(drop=True)
 
     # Define the specific date range for processing
     start_date_str = (prediction_date - timedelta(days=DAYS_OF_DATA_NEEDED)).strftime('%Y-%m-%d')
@@ -200,14 +202,12 @@ def build_prediction_dataset(prediction_date: datetime):
                 start_date=start_date_str,
                 end_date=end_date_str
             )
-            if snowpack_df is not None: 
-                yearly_snowpack_dfs.append(snowpack_df)
+            if snowpack_df is not None: yearly_snowpack_dfs.append(snowpack_df)
                 
             weather_df = dsu.process_weather_data_for_polygon_and_year(
                 polygon_info=polygon_row.to_dict(), year=year, weather_locations_df=snowpack_locations_df
             )
-            if weather_df is not None: 
-                yearly_weather_dfs.append(weather_df)
+            if weather_df is not None: yearly_weather_dfs.append(weather_df)
         
         if not yearly_snowpack_dfs or not yearly_weather_dfs:
             logging.warning(f"No snowpack or weather data could be processed for polygon '{polygon_id}'. Skipping.")

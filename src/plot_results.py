@@ -42,15 +42,6 @@ def create_prediction_map(prediction_date: Union[str, datetime]):
                                                 accepting either a 'YYYY-MM-DD' string
                                                 or a datetime object.
     """
-    def get_confidence(row):
-        # Get the predicted hazard level for this row (e.g., 3)
-        predicted_level = row['predicted_hazard']
-        # Construct the name of the corresponding probability column (e.g., 'calibrated_proba_hazard_3')
-        prob_col_name = f'calibrated_proba_hazard_{predicted_level}'
-        
-        # Check if that column exists and return its value
-        return row[prob_col_name] if prob_col_name in row else 0.0 # Return a default value if the column isn't found
-
     # --- Input Validation and Conversion ---
     if isinstance(prediction_date, str):
         try:
@@ -66,36 +57,29 @@ def create_prediction_map(prediction_date: Union[str, datetime]):
 
     try:
         # Use centralized paths from the config file
+        geojson_path = config.PATHS["RAW_DATA"]["polygons"]
+        predictions_path = config.PATHS["RESULTS"]["hazard_predictions_csv"]
         output_dir = config.RESULTS_DIR
-        
-        # 1. Load the polygon geometries
-        polygons_gdf = gpd.read_file(config.PATHS["RAW_DATA"]["polygons"])
-        # Ensure the polygon ID column is an integer for merging
-        polygons_gdf['id'] = polygons_gdf['title'].astype(int)
 
-        # 2. Load the LATEST prediction results from the correct CSV file
-        predictions_df = pd.read_csv(config.PATHS["ARTIFACTS"]["hazard_predictions_csv"])
-        
-        # Convert the 'date' column from strings back to datetime objects
-        predictions_df['date'] = pd.to_datetime(predictions_df['date'])
-        # Ensure the polygon ID column is an integer for merging
-        predictions_df['polygon'] = predictions_df['polygon'].astype(int)
-
+        gdf = gpd.read_file(geojson_path)
+        preds_df = pd.read_csv(predictions_path)
     except FileNotFoundError as e:
         logging.error(f"Could not read a required data file: {e}. Please ensure paths are correct and predictions exist.")
         return
 
-    # 3. Filter the predictions to get only the data for the requested date
-    date_str = prediction_date.strftime('%Y-%m-%d')
-    day_specific_preds = predictions_df[predictions_df['date'] == date_str].copy()
+    # Prepare and merge data
+    preds_df['date'] = pd.to_datetime(preds_df['date'])
+    day_specific_preds = preds_df[preds_df['date'].dt.date == prediction_date.date()].copy()
 
     if day_specific_preds.empty:
         logging.warning(f"No predictions found for {prediction_date.date()}. Cannot create map.")
         return
 
-    # 4. Merge the polygon geometries with the daily prediction data
-    # This step combines the data into the final GeoDataFrame for the map.
-    merged_gdf = polygons_gdf.merge(day_specific_preds, left_on='id', right_on='polygon', how='inner')    
+    # The GeoJSON 'polygon_number' should match the 'polygon' ID in the predictions
+    gdf['polygon'] = gdf['polygon_number'].astype(int)
+    day_specific_preds['polygon'] = day_specific_preds['polygon'].astype(int)
+    merged_gdf = gdf.merge(day_specific_preds, on='polygon', how='left')
+    
     numeric_cols = merged_gdf.select_dtypes(include=np.number).columns
     merged_gdf[numeric_cols] = merged_gdf[numeric_cols].fillna(0)
 
@@ -113,7 +97,7 @@ def create_prediction_map(prediction_date: Union[str, datetime]):
                    <b>Avalanche Hazard Forecast: {prediction_date.strftime('%Y-%m-%d')}</b>
                  </h3>
                  '''
-    m.get_root().html.add_child(folium.Element(title_html)) # type: ignore
+    m.get_root().html.add_child(folium.Element(title_html)) 
 
     # --- Add Tile Layers (Basemaps) ---
     folium.TileLayer(
@@ -156,7 +140,6 @@ def create_prediction_map(prediction_date: Union[str, datetime]):
     }
     # Create formatted strings for the tooltip
     merged_gdf['hazard_level_str'] = merged_gdf['predicted_hazard'].apply(lambda x: hazard_levels.get(int(x), 'Unknown'))
-    merged_gdf['confidence'] = merged_gdf.apply(get_confidence, axis=1)
     merged_gdf['confidence_str'] = (merged_gdf['confidence'] * 100).map('{:.1f}%'.format)
 
     # 1. Polygon Outlines Layer
@@ -168,7 +151,7 @@ def create_prediction_map(prediction_date: Union[str, datetime]):
             'color': '#ffffff', # White outlines
             'weight': 1.5,
         },
-        tooltip=folium.GeoJsonTooltip(fields=['title'], aliases=['Region:'])
+        tooltip=folium.GeoJsonTooltip(fields=['polygon_number'], aliases=['Region:'])
     ).add_to(outline_layer)
     outline_layer.add_to(m)
 
@@ -177,14 +160,14 @@ def create_prediction_map(prediction_date: Union[str, datetime]):
     folium.GeoJson(
         merged_gdf,
         style_function=lambda feature: {
-            'fillColor': likelihood_colormap(feature['properties']['confidence']),
+            'fillColor': likelihood_colormap(feature['properties']['event_adjusted_score']),
             'color': 'black',
             'weight': 1,
             'fillOpacity': 0.5
         },
         tooltip=folium.GeoJsonTooltip(
-            fields=['title', 'confidence_str'],
-            aliases=['Region:', 'Hazard Confidence:'],
+            fields=['polygon_number', 'event_adjusted_score'],
+            aliases=['Region:', 'Likelihood Score:'],
             localize=True
         )
     ).add_to(likelihood_layer)
@@ -201,7 +184,7 @@ def create_prediction_map(prediction_date: Union[str, datetime]):
             'fillOpacity': 0.6 # A standard opacity
         },
         tooltip=folium.GeoJsonTooltip(
-            fields=['title', 'predicted_hazard', 'hazard_level_str', 'confidence_str'],
+            fields=['polygon_number', 'predicted_hazard', 'hazard_level_str', 'confidence_str'],
             aliases=['Region:', 'Predicted Rating:', 'Hazard Level:', 'Confidence:'],
             localize=True
         )
@@ -221,7 +204,7 @@ def create_prediction_map(prediction_date: Union[str, datetime]):
             'fillOpacity': 0.15 + (feature['properties']['confidence'] * 0.75)
         },
         tooltip=folium.GeoJsonTooltip(
-            fields=['title', 'predicted_hazard', 'hazard_level_str', 'confidence_str'],
+            fields=['polygon_number', 'predicted_hazard', 'hazard_level_str', 'confidence_str'],
             aliases=['Region:', 'Predicted Rating:', 'Hazard Level:', 'Confidence:'],
             localize=True
         )
