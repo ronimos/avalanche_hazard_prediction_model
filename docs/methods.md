@@ -130,15 +130,37 @@ All fitting choices are made inside the training seasons, including standardizat
 
 | Metric | What it measures | Notes |
 | --- | --- | --- |
-| ROC AUC, per season | Ranking of polygon-days by likelihood | Does not depend on detection rate, so it is valid under positive-unlabeled labels |
+| ROC AUC, per season | Ranking of all polygon-days by likelihood | Mostly rewards knowing which polygons get reports at all |
+| Within-polygon AUC, per season | Ranking of each polygon's days against each other, averaged with weights by events | The main skill measure: it does not depend on detection differences between polygons |
 | Average precision, per season | Ranking quality among the rare positives | Compared with that season's base rate |
 | Brier score of ψ·d, per season | Calibration of the probability of a record | ψ alone cannot be checked directly, because true occurrence is never observed |
 | Skill by polygon group | Whether pooling helps | Polygons grouped by number of records: none, few, many |
 
 The model has to beat two baselines on held-out seasons:
 
-1. **Climatology:** day of season plus polygon. This scored AUC 0.68 and 0.58 on the previous pipeline's two seasons.
-2. **Logistic regression** on the same drivers without the hierarchy or the detection model. This shows what the extra structure adds.
+1. **Climatology:** a smooth day-of-season curve plus a fixed effect per polygon.
+2. **Driver logistic regression:** climatology plus the 14 drivers and the stability-cap indicators, without pooling or a detection model. This shows what the hierarchical structure adds.
+
+The harness is `src/evaluation.py`; any model with `fit(table)` and `predict(table)` can be scored.
+
+### Baseline results
+
+Held-out season results for the D2+ label (`results/evaluation/season_metrics_d2plus.csv`):
+
+| Held-out season | Recorded D2+ polygon-days | Climatology within-polygon AUC | Drivers within-polygon AUC | Climatology average precision | Drivers average precision |
+| --- | --- | --- | --- | --- | --- |
+| 2023-24 | 803 (2.6%) | 0.72 | 0.79 | 0.19 | 0.27 |
+| 2024-25 | 708 (2.3%) | 0.71 | 0.77 | 0.21 | 0.29 |
+| 2025-26 | 404 (1.3%) | 0.80 | 0.83 | 0.19 | 0.29 |
+
+The drivers add skill in every held-out season. Within-polygon AUC rises by 0.03 to 0.07, and average precision rises by 0.08 to 0.10. The natural-trigger and any-size labels show the same pattern, with within-polygon AUC gains of 0.04 to 0.07.
+
+Pooled AUC is 0.89 to 0.94 for both baselines. Climatology alone reaches it, which confirms that pooled AUC mostly measures where reports come from rather than when avalanches happen.
+
+Two caveats:
+
+- 2023-24 and 2024-25 drivers come from the `output/` SNOWPACK runs, and 2025-26 from the operational forecast runs. If the earlier runs used analyzed rather than forecast weather, their driver skill would overstate what a forecast can achieve. The 2025-26 forecast-run season scores highest, so there is no sign of this yet.
+- With three seasons, these numbers have no confidence intervals yet. A block bootstrap over storm cycles is the next addition to the harness.
 
 Posterior predictive checks compare simulated and observed records by season, by polygon group and by month. Reporting effort is expected to differ between seasons, so the check confirms that η\_s absorbs it.
 
@@ -148,7 +170,7 @@ Work happens on the `dev` branch. The production forecast keeps running the curr
 
 - [x] Load the CAIC export and assign records to polygons (`src/avalanche_observations.py`, with tests)
 - [x] Build the daily driver table from `.smet` files for 2023-24 to 2025-26 (`src/snowpack_drivers.py`, with tests)
-- [ ] Build the evaluation harness and both baselines
+- [x] Build the evaluation harness and both baselines (`src/evaluation.py`, with tests)
 - [ ] Fit the occupancy-detection model and run posterior checks
 - [ ] Connect the model to `predict.py`, keeping the current output format
 
