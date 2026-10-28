@@ -31,13 +31,12 @@ Author: Ron Simenhois
 """
 import logging
 import os
-from typing import Dict
+from typing import Dict, List
 
 # Let NumPyro run chains in parallel on CPU; must be set before jax is imported
 os.environ.setdefault("XLA_FLAGS", "--xla_force_host_platform_device_count=4")
 
 import arviz as az
-import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pymc as pm
@@ -49,7 +48,6 @@ from sklearn.impute import SimpleImputer
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import SplineTransformer, StandardScaler
 
-import config
 import likelihood_data as ld
 
 # Prior median 0.2 for the share of D2+ avalanches that get reported in an average polygon
@@ -58,12 +56,6 @@ DETECTION_PRIOR_SD = 0.75
 
 # Season-to-season variation in reporting effort, on the logit scale
 SEASON_EFFECT_SD = 0.5
-
-
-def polygon_regions() -> pd.Series:
-    """Forecast region of each polygon, indexed by polygon number."""
-    polygons = gpd.read_file(config.PATHS["RAW_DATA"]["polygons"])
-    return polygons.set_index(polygons["polygon_number"].astype(int))["referenc_region"].sort_index()
 
 
 def weekend_or_holiday(dates: pd.Series) -> np.ndarray:
@@ -77,8 +69,9 @@ def weekend_or_holiday(dates: pd.Series) -> np.ndarray:
 class OccupancyDetectionModel:
     """Hierarchical occupancy-detection model fit with NUTS (PyMC + NumPyro)."""
 
-    def __init__(self, draws: int = 500, tune: int = 1000, chains: int = 4, target_accept: float = 0.95,
-                 n_predict_draws: int = 400, seed: int = 0):
+    def __init__(self, drivers: List[str] = ld.DRIVERS, draws: int = 500, tune: int = 1000, chains: int = 4,
+                 target_accept: float = 0.95, n_predict_draws: int = 400, seed: int = 0):
+        self.drivers = drivers
         self.draws, self.tune, self.chains, self.target_accept = draws, tune, chains, target_accept
         self.n_predict_draws = n_predict_draws
         self.seed = seed
@@ -88,7 +81,7 @@ class OccupancyDetectionModel:
         """Driver matrix, season-curve basis and index arrays for a slice of the modeling table."""
         if fit:
             self._drivers = ColumnTransformer([
-                ("drivers", make_pipeline(SimpleImputer(strategy="median", add_indicator=True), StandardScaler()), ld.DRIVERS),
+                ("drivers", make_pipeline(SimpleImputer(strategy="median", add_indicator=True), StandardScaler()), self.drivers),
                 ("capped", "passthrough", ["Sn_capped", "Ss_capped"]),
             ]).fit(df)
             self._season_curve = SplineTransformer(n_knots=6, degree=3, include_bias=False).fit(df[["day_of_season"]])
@@ -99,7 +92,7 @@ class OccupancyDetectionModel:
         return X, B, polygon, region, weekend_or_holiday(df["date"])
 
     def fit(self, df: pd.DataFrame) -> "OccupancyDetectionModel":
-        regions = polygon_regions()
+        regions = ld.polygon_regions()
         self._polygon_index = pd.Index(regions.index)
         self._region_names = pd.Index(sorted(regions.unique()))
         self._region_of_polygon = self._region_names.get_indexer(regions.to_numpy())

@@ -73,21 +73,27 @@ def climatology_model() -> SklearnModel:
     return SklearnModel(make_pipeline(features, LogisticRegression(C=1.0, max_iter=2000)), ["day_of_season", "polygon"])
 
 
-def driver_logistic_model() -> SklearnModel:
+def driver_logistic_model(drivers: List[str] = ld.DRIVERS) -> SklearnModel:
     """Baseline 2: climatology plus the snowpack drivers, without pooling or a detection model."""
     features = ColumnTransformer([
         ("season_curve", SplineTransformer(n_knots=6, degree=3), ["day_of_season"]),
         ("polygon", OneHotEncoder(handle_unknown="ignore"), ["polygon"]),
-        ("drivers", make_pipeline(SimpleImputer(strategy="median", add_indicator=True), StandardScaler()), ld.DRIVERS),
+        ("drivers", make_pipeline(SimpleImputer(strategy="median", add_indicator=True), StandardScaler()), drivers),
         ("capped", "passthrough", ["Sn_capped", "Ss_capped"]),
     ])
-    columns = ["day_of_season", "polygon", *ld.DRIVERS, "Sn_capped", "Ss_capped"]
+    columns = ["day_of_season", "polygon", *drivers, "Sn_capped", "Ss_capped"]
     return SklearnModel(make_pipeline(features, LogisticRegression(C=1.0, max_iter=5000)), columns)
+
+
+def activity_logistic_model() -> SklearnModel:
+    """Driver logistic regression plus recent recorded activity in the polygon and its region."""
+    return driver_logistic_model(ld.DRIVERS + ld.ACTIVITY_FEATURES)
 
 
 BASELINES: Dict[str, Callable[[], SklearnModel]] = {
     "climatology": climatology_model,
     "driver_logistic": driver_logistic_model,
+    "activity_logistic": activity_logistic_model,
 }
 
 
@@ -255,13 +261,16 @@ def main() -> None:
     parser.add_argument("--label", choices=sorted(ld.LABELS), default="d2plus")
     parser.add_argument("--models", nargs="+", default=list(BASELINES), help="Models to score; 'bayes' adds the occupancy-detection model.")
     parser.add_argument("--n-boot", type=int, default=500)
+    parser.add_argument("--reference", default="climatology", help="Model that bootstrap differences are taken against.")
+    parser.add_argument("--activity-lag", type=int, default=ld.DEFAULT_ACTIVITY_LAG,
+                        help="Days between the end of the recent-activity window and the forecast day.")
     args = parser.parse_args()
 
-    table = ld.load_modeling_table(args.label)
+    table = ld.load_modeling_table(args.label, activity_lag=args.activity_lag)
     logging.info(f"Modeling table: {len(table)} polygon-days, {table['y'].sum()} with a recorded {args.label} event.")
 
-    output_dir = config.RESULTS_DIR / "evaluation"
-    output_dir.mkdir(exist_ok=True)
+    output_dir = config.RESULTS_DIR / "evaluation" / f"lag{args.activity_lag}"
+    output_dir.mkdir(parents=True, exist_ok=True)
     predictions, by_season, by_group = {}, [], []
     for name in args.models:
         make_model = BASELINES.get(name) or _extra_model(name)
@@ -279,7 +288,7 @@ def main() -> None:
     print(by_season.round(3).to_string())
     print(by_group.round(3).to_string())
 
-    intervals = block_bootstrap(predictions, reference="climatology", n_boot=args.n_boot)
+    intervals = block_bootstrap(predictions, reference=args.reference, n_boot=args.n_boot)
     intervals.to_csv(output_dir / f"bootstrap_{args.label}.csv", index=False)
     print(intervals.round(3).to_string(index=False))
 
@@ -301,6 +310,9 @@ def _extra_model(name: str) -> Callable:
     if name == "bayes":
         import bayes_model
         return bayes_model.OccupancyDetectionModel
+    if name == "bayes_activity":
+        import bayes_model
+        return lambda: bayes_model.OccupancyDetectionModel(drivers=ld.DRIVERS + ld.ACTIVITY_FEATURES)
     raise ValueError(f"Unknown model '{name}'.")
 
 

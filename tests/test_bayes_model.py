@@ -16,7 +16,7 @@ def test_weekend_and_holidays():
 @pytest.fixture(scope="module")
 def simulated():
     rng = np.random.default_rng(1)
-    polygons = bm.polygon_regions().index[:20]
+    polygons = ld.polygon_regions().index[:20]
     dates = pd.date_range("2024-12-01", "2025-03-31")
     df = pd.DataFrame([(p, d) for p in polygons for d in dates], columns=["polygon", "date"])
     df["season"] = 2024

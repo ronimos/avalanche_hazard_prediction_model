@@ -76,7 +76,9 @@ def test_within_polygon_auc_ignores_differences_between_polygons():
 
 
 def test_baselines_fit_and_predict_probabilities():
-    table = ld.build_modeling_table(_drivers(polygons=(1, 2, 3)), pd.DataFrame(columns=["polygon", "date", "d2plus_avalanches"]))
+    activity = pd.DataFrame({"polygon": [1], "date": ["2024-01-09"], "d2plus_avalanches": [1], "n_avalanches": [2]})
+    regions = pd.Series({1: "A", 2: "A", 3: "B"})
+    table = ld.build_modeling_table(_drivers(polygons=(1, 2, 3)), activity, regions=regions)
     table["y"] = (np.arange(len(table)) % 3 == 0).astype(int)
 
     for make_model in ev.BASELINES.values():
@@ -111,3 +113,33 @@ def test_bootstrap_is_paired_and_brackets_the_estimate():
     assert out.loc[("b - a", "auc"), ["estimate", "ci_low", "ci_high"]].abs().max() < 1e-12
     row = out.loc[("a", "brier")]
     assert row["ci_low"] <= row["estimate"] <= row["ci_high"]
+
+
+def test_recent_activity_uses_only_days_before_the_forecast():
+    regions = pd.Series({1: "A", 2: "A", 3: "B"})
+    activity = pd.DataFrame({"polygon": [1, 2, 1], "date": ["2025-01-10", "2025-01-10", "2025-01-13"],
+                             "d2plus_avalanches": [1, 0, 3], "n_avalanches": [1, 4, 3]})
+
+    by_polygon, by_region = ld.recent_activity(activity, regions, lag=1, window=2)
+    poly = by_polygon.set_index(["polygon", "date"])["polygon_recent_any"]
+    region = by_region.set_index(["region", "date"])
+
+    assert poly.get((1, pd.Timestamp("2025-01-10")), 0) == 0  # same-day record is not used
+    assert poly[(2, pd.Timestamp("2025-01-11"))] == 1  # day after a polygon's last record
+    assert poly[(1, pd.Timestamp("2025-01-11"))] == 1  # window Jan 9-10
+    assert poly[(1, pd.Timestamp("2025-01-12"))] == 1  # window Jan 10-11
+    assert poly[(1, pd.Timestamp("2025-01-13"))] == 0  # window Jan 11-12
+    assert region.loc[("A", pd.Timestamp("2025-01-11")), "region_recent_any"] == pytest.approx(np.log1p(5))
+    assert region.loc[("A", pd.Timestamp("2025-01-11")), "region_recent_d2plus"] == pytest.approx(np.log1p(1))
+    assert ("B", pd.Timestamp("2025-01-11")) not in region.index
+
+
+def test_activity_lag_shifts_the_window():
+    regions = pd.Series({1: "A"})
+    activity = pd.DataFrame({"polygon": [1], "date": ["2025-01-10"], "d2plus_avalanches": [1], "n_avalanches": [1]})
+
+    by_polygon, _ = ld.recent_activity(activity, regions, lag=2, window=2)
+    poly = by_polygon.set_index("date")["polygon_recent_any"]
+
+    assert poly.get(pd.Timestamp("2025-01-11"), 0) == 0  # window Jan 8-9
+    assert poly[pd.Timestamp("2025-01-12")] == 1         # window Jan 9-10
