@@ -196,6 +196,28 @@ Driver effects (posterior means on standardized drivers) that are consistent acr
 
 Skier stability Sk38 and its depth change sign between folds, so their effects are not reliable.
 
+### Recent regional activity
+
+Avalanche cycles last several days and cover whole regions, so recorded activity from the days before a forecast could carry information the snowpack drivers miss. Three features are added (`src/likelihood_data.py`), each over a 2-day window ending `lag` days before the forecast day:
+
+- whether the polygon itself had any record;
+- the number of D2+ avalanches recorded in its forecast region (log of 1 + count);
+- the number of avalanches of any size recorded in its region (log of 1 + count).
+
+The lag decides what is available in practice. The forecast runs around 08:16 and predicts the next day. At lag 1, the window ends on the day the forecast is issued, so it would use reports from that same morning and day, which aren't in yet. Lag 2, through the previous day, is the earliest realistic setting, and even then some of that day's reports arrive later. The export has no report timestamps to measure the delay.
+
+Gain from the activity features over the snowpack drivers alone, D2+ label (paired 95% intervals from the block bootstrap):
+
+| Held-out season | Within-polygon AUC gain, lag 1 | Within-polygon AUC gain, lag 2 | Average precision gain, lag 1 | Average precision gain, lag 2 |
+| --- | --- | --- | --- | --- |
+| 2023-24 | +0.014 (0.000 to 0.021) | +0.003 (−0.012 to 0.009) | +0.039 (0.018 to 0.054) | +0.017 (0.003 to 0.029) |
+| 2024-25 | +0.030 (0.008 to 0.055) | +0.016 (0.001 to 0.034) | +0.040 (0.020 to 0.061) | +0.019 (−0.001 to 0.040) |
+| 2025-26 | +0.035 (0.006 to 0.069) | +0.015 (−0.004 to 0.034) | +0.052 (0.015 to 0.085) | +0.018 (−0.012 to 0.042) |
+
+At lag 1 the gain is clear in every season. At the operational lag 2 it is about half as large, and only two of the six comparisons exclude zero. Activity is worth most if reports from the previous day arrive before the forecast runs.
+
+The Bayesian model with the same features (lag 2) converged in all three folds (R-hat at most 1.010, no divergent transitions) and again matches the logistic regression: paired within-polygon AUC differences are 0.000 in every season. Regional D2+ activity has the largest effect (posterior mean +0.32 to +0.47 on the standardized count), the polygon's own recent record adds +0.16 to +0.21, and all-size regional activity adds nothing once D2+ is in. The spread of the storm-day effect barely shrinks (sd 1.38 to 1.71, against 1.41 to 1.77 without activity), so 2-day-old reports explain little of the regional cycles.
+
 ## Status and open questions
 
 Work happens on the `dev` branch. The production forecast keeps running the current models until the new one beats both baselines on held-out seasons.
@@ -205,7 +227,7 @@ Work happens on the `dev` branch. The production forecast keeps running the curr
 - [x] Build the evaluation harness and both baselines (`src/evaluation.py`, with tests)
 - [x] Fit the occupancy-detection model (`src/bayes_model.py`, with tests)
 - [ ] Run posterior predictive checks, and rerun the 2024-25 fold with longer chains
-- [ ] Make the storm-day effect forecastable: recent recorded activity in the region is known at forecast time
+- [x] Add recent regional activity as a forecastable feature (lag 2 by default)
 - [ ] Connect the model to `predict.py`, keeping the current output format
 
 Open questions:
@@ -213,4 +235,5 @@ Open questions:
 - **Observer access by polygon.** Highway paths, ski-area boundaries and trailhead locations would give the detection model its strongest covariates. Is there a layer for these?
 - **Detection prior.** Which polygons can be treated as near-fully monitored?
 - **Committing the export.** The CSV includes free-text comments and descriptions. Should it go into the public GitHub repo, or stay on the server only?
+- **Report delay.** Are most of the previous day's avalanche reports in by about 8 am? If so, lag 1 activity (the larger gain) could be used by running the forecast later in the morning.
 - **Thin 2025-26 snowpack.** Median November to May modeled snow depth was 0.27 m, against 0.59 m in 2023-24 and 0.48 m in 2024-25. Confirm this matches observations and is not a change in the forecast runs.
