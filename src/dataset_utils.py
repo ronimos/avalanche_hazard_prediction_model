@@ -39,12 +39,11 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import requests
+from shapely.geometry import Point
 from tqdm import tqdm
-import datetime
-
 
 # Local import for the .pro file reader
-from snowpack_reader import read_snowpack
+from snowpack_reader import SnowpackProfile, read_snowpack
 # Import project-wide configurations
 import config
 
@@ -138,36 +137,34 @@ def get_polygon_centroids(file_path: Path, projected_crs: str) -> Optional[gpd.G
 
     Returns:
         Optional[gpd.GeoDataFrame]: A GeoDataFrame containing the polygon ID,
-                                    title, and centroid coordinates (lat/lon).
+                                    polygon_number, and centroid coordinates (lat/lon).
                                     Returns None if a critical error occurs.
     """
     logging.info(f"Reading and processing GeoJSON from: {file_path}")
     try:
         def _validate_geojson_columns(gdf):
             # Ensure GeoJSON contains required columns
-            return 'geometry' in gdf.columns and 'id' in gdf.columns and 'title' in gdf.columns
+            return 'geometry' in gdf.columns and 'id' in gdf.columns and 'polygon_number' in gdf.columns
 
         gdf = gpd.read_file(file_path)
         if not _validate_geojson_columns(gdf):
-            logging.error("GeoJSON must contain 'id', 'title', and 'geometry' properties.")
+            logging.error("GeoJSON must contain 'id', 'polygon_number', and 'geometry' properties.")
             return None
         
         gdf = gdf[gdf.geometry.type.isin(['Polygon', 'MultiPolygon'])].copy()
         if gdf.empty:
             logging.warning("No valid Polygon or MultiPolygon geometries found.")
             return gdf
-    
+
         # Project to a suitable CRS for accurate centroid calculation
         projected_centroids = gdf.geometry.to_crs(projected_crs).centroid
-        if gdf.crs is None:
-            raise ValueError("The input GeoJSON file is missing Coordinate Reference System (CRS) information.")
         # Convert the centroid back to the original CRS (e.g., WGS84) for lat/lon
         gdf['centroid'] = projected_centroids.to_crs(gdf.crs)
         gdf['centroid_lat'] = gdf['centroid'].y
         gdf['centroid_lon'] = gdf['centroid'].x
         
         logging.info(f"Successfully calculated centroids for {len(gdf)} polygons.")
-        return gdf[['id', 'title', 'centroid_lat', 'centroid_lon']]
+        return gdf[['id', 'polygon_number', 'centroid_lat', 'centroid_lon']]
     except Exception as e:
         logging.error(f"An error occurred while processing the GeoJSON file: {e}", exc_info=True)
         return None
@@ -205,8 +202,8 @@ def find_closest_stations(points_df: pd.DataFrame, stations_df: pd.DataFrame) ->
     closest_indices = np.argmin(distance_matrix_km, axis=1)
 
     return pd.DataFrame({
-        'st_id': stations_df.loc[closest_indices, 'id'].to_numpy(), # type: ignore
-        'zone': stations_df.loc[closest_indices, 'zone'].to_numpy() # type: ignore
+        'st_id': stations_df.loc[closest_indices, 'id'].values,
+        'zone': stations_df.loc[closest_indices, 'zone'].values
     }, index=points_df.index)
 
 def create_download_manifest() -> Optional[pd.DataFrame]:
@@ -229,7 +226,11 @@ def create_download_manifest() -> Optional[pd.DataFrame]:
     if manifest_path.exists():
         logging.info(f"Loading existing download manifest from '{manifest_path}'")
         try:
-            return pd.read_csv(manifest_path)
+            cached_manifest = pd.read_csv(manifest_path)
+            cached_years = set(cached_manifest['water_year'].dropna().astype(int))
+            if cached_years == set(config.PROCESSING_CONFIG["target_years"]):
+                return cached_manifest
+            logging.info(f"Existing manifest covers water years {sorted(cached_years)}, not {config.PROCESSING_CONFIG['target_years']}. Recreating it.")
         except Exception as e:
             logging.warning(f"Could not read existing manifest file: {e}. Recreating it.")
 
@@ -240,9 +241,7 @@ def create_download_manifest() -> Optional[pd.DataFrame]:
         danger_path = config.PATHS["RAW_DATA"]["danger_ratings"]
         locations_path = config.PATHS["RAW_DATA"]["snowpack_locations"]
 
-        if (centroids_df := get_polygon_centroids(polygons_path, config.PROCESSING_CONFIG["geoprojection_epsg"])) is None:
-            logging.critical("Failed to load or process polygon centroids. Cannot create manifest.")
-            return None
+        centroids_df = get_polygon_centroids(polygons_path, config.PROCESSING_CONFIG["geoprojection_epsg"])
         danger_df = pd.read_csv(danger_path)
         snowpack_locations = pd.read_csv(locations_path)
     except (FileNotFoundError, KeyError) as e:
@@ -254,15 +253,15 @@ def create_download_manifest() -> Optional[pd.DataFrame]:
         return None
 
     danger_df['polygon'] = pd.to_numeric(danger_df['polygon'], errors='coerce')
-    centroids_df['title'] = pd.to_numeric(centroids_df['title'], errors='coerce')
+    centroids_df['polygon_number'] = pd.to_numeric(centroids_df['polygon_number'], errors='coerce')
 
     danger_df = danger_df.dropna(subset=['polygon'])
-    centroids_df.dropna(subset=['title'], inplace=True)
+    centroids_df.dropna(subset=['polygon_number'], inplace=True)
 
     danger_df['polygon'] = danger_df['polygon'].astype(int)
-    centroids_df['title'] = centroids_df['title'].astype(int)
+    centroids_df['polygon_number'] = centroids_df['polygon_number'].astype(int)
 
-    merged_df = danger_df.merge(centroids_df, left_on='polygon', right_on='title', how='left')
+    merged_df = danger_df.merge(centroids_df, left_on='polygon', right_on='polygon_number', how='left')
 
     unique_polygons = merged_df.dropna(
         subset=['centroid_lat', 'centroid_lon']
@@ -387,6 +386,24 @@ def download_smet_files(info_df: pd.DataFrame):
             logging.error(f"Failed to download from {download_url}: {e}")
             
             
+def avalanche_records_cover_target_years(records: List[Dict[str, Any]]) -> bool:
+    """
+    Checks whether cached avalanche records extend into the latest water year
+    listed in `PROCESSING_CONFIG["target_years"]`.
+
+    Args:
+        records (List[Dict[str, Any]]): Raw avalanche observation records.
+
+    Returns:
+        bool: True if the newest record falls in (or after) the latest target year.
+    """
+    observed = pd.to_datetime([r.get('observed_at') for r in records], errors='coerce', utc=True).dropna()
+    if observed.empty:
+        return False
+    newest = observed.max()
+    newest_water_year = newest.year if newest.month >= 10 else newest.year - 1
+    return newest_water_year >= max(config.PROCESSING_CONFIG["target_years"])
+
 def load_or_fetch_avalanche_data(file_path: Path) -> List[Dict[str, Any]]:
     """
     Loads raw avalanche observation records from a local JSON file. If the file
@@ -403,7 +420,10 @@ def load_or_fetch_avalanche_data(file_path: Path) -> List[Dict[str, Any]]:
     if file_path.exists():
         logging.info(f"Loading raw avalanche data from '{file_path}'.")
         with file_path.open('r', encoding='utf-8') as f:
-            return json.load(f)
+            cached_records = json.load(f)
+        if avalanche_records_cover_target_years(cached_records):
+            return cached_records
+        logging.info("Cached avalanche records do not reach the latest target water year. Re-fetching from the API.")
 
     all_records = []
     session = requests.Session()
@@ -418,8 +438,7 @@ def load_or_fetch_avalanche_data(file_path: Path) -> List[Dict[str, Any]]:
                 )
                 response.raise_for_status()
                 data = response.json()
-                if not data: 
-                    break
+                if not data: break
                 all_records.extend(data)
                 time.sleep(0.1)
                 break
@@ -429,8 +448,7 @@ def load_or_fetch_avalanche_data(file_path: Path) -> List[Dict[str, Any]]:
         else:
             logging.error(f"Failed to fetch page {page} after {config.API_CONFIG['max_retries']} attempts. Stopping.")
             break
-        if not data: 
-            break
+        if not data: break
 
     with file_path.open('w', encoding='utf-8') as f:
         json.dump(all_records, f, indent=2)
@@ -466,10 +484,10 @@ def process_daily_avalanche_data(raw_records: List[Dict[str, Any]],
     logging.info("Assigning avalanches to polygons using spatial join...")
     
     polygons_gdf = gpd.read_file(polygons_geojson_path)
-    if 'title' in polygons_gdf.columns:
-        polygons_gdf.rename(columns={'title': 'polygon'}, inplace=True)
+    if 'polygon_number' in polygons_gdf.columns:
+        polygons_gdf.rename(columns={'polygon_number': 'polygon'}, inplace=True)
     else:
-        logging.error("GeoJSON is missing the 'title' property in its features.")
+        logging.error("GeoJSON is missing the 'polygon_number' property in its features.")
         return None
     
     processed_records = [
@@ -552,16 +570,10 @@ def process_snowpack_data_for_polygon_and_year(polygon_info: dict,
         Optional[pd.DataFrame]: A DataFrame containing daily time-series features
                                 for the snowpack, or None if data cannot be processed.
     """
-    polygon_name = polygon_info['title']
+
+    polygon_name = polygon_info['polygon']
     dists = haversine_distance(polygon_info['centroid_lat'], polygon_info['centroid_lon'], snowpack_locations_df, 'lat', 'lon')
-    closest_station_row = snowpack_locations_df.loc[dists.idxmin()]
-    
-    # Handle the possibility of .loc returning a DataFrame due to duplicate indexes.
-    # This ensures `closest_station` is always a Series (a single row).
-    if isinstance(closest_station_row, pd.DataFrame):
-        closest_station = closest_station_row.iloc[0]
-    else:
-        closest_station = closest_station_row
+    closest_station = snowpack_locations_df.loc[dists.idxmin()]
     zone_id = f"zone{int(closest_station['zone']):03d}"
     profile_id = f"{int(closest_station['id']):06d}"
     pro_path = config.PATHS["EXTERNAL_DATA"]["snowpack_output"] / str(year) / zone_id / profile_id / f"{profile_id}_res.pro"
@@ -579,20 +591,16 @@ def process_snowpack_data_for_polygon_and_year(polygon_info: dict,
         logging.error(f"Failed to initialize SnowpackProfile reader for {pro_path}: {e}", exc_info=True)
         return None
 
-    if start_date is None: 
-        start_date = f"{year}-10-01"
-    if end_date is None: 
-        end_date = f"{year+1}-04-30"
+    if start_date is None: start_date = f"{year}-10-01"
+    if end_date is None: end_date = f"{year+1}-04-30"
     
     sliced_profile = reader.slice(start_date=start_date, end_date=end_date)
-    if len(sliced_profile) == 0: 
-        return None
+    if len(sliced_profile) == 0: return None
 
     weak_layers_df = sliced_profile.find_layer_by_criteria(
         criteria=config.SNOWPACK_CONFIG["weak_layer_criteria"], search_from='bottom'
     )
-    if weak_layers_df.empty: 
-        return None
+    if weak_layers_df.empty: return None
     
     # Extract gs_difference and hardness_difference from matching_parameters
     # The 'matching_parameters' column contains a dictionary of the criteria matched.
@@ -608,20 +616,15 @@ def process_snowpack_data_for_polygon_and_year(polygon_info: dict,
     
     slab_results = []
     for date, wl_row in weak_layers_df.iterrows():
-        # This check verifies the type and acts as a guard for Pylance.
-        if not isinstance(date, (datetime.date, datetime.datetime)):
-            continue  # Skip if the index item is not a date for some reason
         wl_height = wl_row['weak_layer_height']
-        if pd.isna(wl_height): 
-            continue
+        if pd.isna(wl_height): continue
         
         slab_summary = sliced_profile.get_profile_summary(
             parameters_to_calculate=config.SNOWPACK_CONFIG["slab_parameters"],
             start_date=date.strftime('%Y-%m-%d'), end_date=date.strftime('%Y-%m-%d'),
             from_height=wl_height, above_or_below='above'
         )
-        if not slab_summary.empty: 
-            slab_results.append(slab_summary)
+        if not slab_summary.empty: slab_results.append(slab_summary)
 
     # Filter out any potentially empty DataFrames before concatenation to avoid FutureWarning
     slab_results = [df for df in slab_results if not df.dropna(how='all').empty]
@@ -640,9 +643,6 @@ def process_snowpack_data_for_polygon_and_year(polygon_info: dict,
     
     upper_snowpack_results = []
     for date, row in general_summary_df.iterrows():
-        # This check verifies the type and acts as a guard for Pylance.
-        if not isinstance(date, (datetime.date, datetime.datetime)):
-            continue  # Skip if the index item is not a date for some reason
         total_height = row['height-max']
         if pd.notna(total_height) and total_height >= 15:
             from_height = total_height - 15
@@ -651,8 +651,7 @@ def process_snowpack_data_for_polygon_and_year(polygon_info: dict,
                 start_date=date.strftime('%Y-%m-%d'), end_date=date.strftime('%Y-%m-%d'),
                 from_height=from_height, above_or_below='above'
             )
-            if not summary.empty: 
-                upper_snowpack_results.append(summary)
+            if not summary.empty: upper_snowpack_results.append(summary)
 
     # Filter out any potentially empty DataFrames before concatenation to avoid FutureWarning
     non_empty_upper_snowpack_results = [df for df in upper_snowpack_results if not df.dropna(how='all').empty]
@@ -701,7 +700,7 @@ def process_snowpack_data_for_polygon_and_year(polygon_info: dict,
             for window in [2, 3, 4, 5, 6, 9]: # Added 7-day window
                 new_cols[f'{feat}_mean_{window}d'] = final_df[feat].rolling(window=window, min_periods=1).mean()
                 new_cols[f'{feat}_std_{window}d'] = final_df[feat].rolling(window=window, min_periods=1).std()
-                new_cols[f'{feat}_trend_{window}d'] = final_df[feat].diff(periods=window).fillna(0) / window # type: ignore
+                new_cols[f'{feat}_trend_{window}d'] = final_df[feat].diff(periods=window).fillna(0) / window
     
     if new_cols:
         final_df = pd.concat([final_df, pd.DataFrame(new_cols)], axis=1)
@@ -754,18 +753,14 @@ def process_weather_data_for_polygon_and_year(polygon_info: dict, year: int, wea
         df = pd.DataFrame(data, columns=columns).rename(columns={'timestamp': 'date', 'VW': 'wind_speed', 'DW': 'wind_dir', 'VW_drift': 'snow_drift'})  
         return df[['date', 'wind_speed', 'wind_dir', 'snow_drift']]       
     
+    polygon_name = polygon_info['polygon']
     dists = haversine_distance(polygon_info['centroid_lat'], polygon_info['centroid_lon'], weather_locations_df, 'lat', 'lon')
-    closest_station_row = weather_locations_df.loc[dists.idxmin()]
-    if isinstance(closest_station_row, pd.DataFrame):
-        closest_station = closest_station_row.iloc[0]
-    else:
-        closest_station = closest_station_row
+    closest_station = weather_locations_df.loc[dists.idxmin()]
     zone_id = f"zone{int(closest_station['zone']):03d}"
     profile_id = f"{int(closest_station['id']):06d}"
     smet_path = config.PATHS["EXTERNAL_DATA"]["snowpack_output"] / str(year) / zone_id / profile_id / f"{profile_id}_res.smet"
 
-    if not smet_path.exists(): 
-        return None
+    if not smet_path.exists(): return None
 
     try:
         weather = read_smet_file(smet_path)
@@ -773,8 +768,7 @@ def process_weather_data_for_polygon_and_year(polygon_info: dict, year: int, wea
         logging.error(f"Failed to process file {smet_path}: {e}", exc_info=True)
         return None
 
-    if weather.empty: 
-        return None
+    if weather.empty: return None
     weather['date'] = pd.to_datetime(weather['date'])
     for col in ['wind_speed', 'wind_dir', 'snow_drift']:
         weather[col] = pd.to_numeric(weather[col], errors='coerce')
@@ -790,7 +784,7 @@ def process_weather_data_for_polygon_and_year(polygon_info: dict, year: int, wea
             for window in [2, 3, 4, 5, 6, 9]: # Added 7-day window
                 new_cols[f'{feat}_mean_{window}d'] = weather[feat].rolling(window=window, min_periods=1).mean()
                 new_cols[f'{feat}_std_{window}d'] = weather[feat].rolling(window=window, min_periods=1).std()
-                new_cols[f'{feat}_trend_{window}d'] = weather[feat].diff(periods=window).fillna(0) / window # type: ignore
+                new_cols[f'{feat}_trend_{window}d'] = weather[feat].diff(periods=window).fillna(0) / window
     
     if new_cols:
         weather = pd.concat([weather, pd.DataFrame(new_cols)], axis=1)

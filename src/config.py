@@ -91,7 +91,7 @@ PATHS = {
     # --- Raw Input Data (should not be modified by scripts) ---
     "RAW_DATA": {
         "polygons": DATA_DIR / "raw" / "BC_Polygons.geojson",
-        "snowpack_locations": DATA_DIR / "raw" / "SnowPackLocations_from_pro_files.csv",
+        "snowpack_locations": DATA_DIR / "raw" / "SnowPackLocations.csv",
         "danger_ratings": DATA_DIR / "external" / "danger_rating_by_polygon.csv",
     },
 
@@ -176,7 +176,7 @@ API_CONFIG = {
 
 # --- DATA PROCESSING CONFIGURATION ---
 PROCESSING_CONFIG = {
-    "target_years": [2023, 2024],
+    "target_years": [2023, 2024, 2025],  # Water years (Oct-Sep, labeled by the starting year)
     "geoprojection_epsg": "EPSG:3310",
 }
 

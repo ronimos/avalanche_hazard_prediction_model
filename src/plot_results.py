@@ -69,23 +69,35 @@ def create_prediction_map(prediction_date: Union[str, datetime]):
 
     # Prepare and merge data
     preds_df['date'] = pd.to_datetime(preds_df['date'])
+    
+    # Filter for the specific date
     day_specific_preds = preds_df[preds_df['date'].dt.date == prediction_date.date()].copy()
 
     if day_specific_preds.empty:
         logging.warning(f"No predictions found for {prediction_date.date()}. Cannot create map.")
         return
 
+    # FIX: Convert the date column to string immediately. 
+    # This prevents Timestamp objects from propagating into the GeoDataFrame and crashing Folium/JSON.
+    day_specific_preds['date'] = day_specific_preds['date'].dt.strftime('%Y-%m-%d')
+
     # The GeoJSON 'polygon_number' should match the 'polygon' ID in the predictions
     gdf['polygon'] = gdf['polygon_number'].astype(int)
     day_specific_preds['polygon'] = day_specific_preds['polygon'].astype(int)
+    
     merged_gdf = gdf.merge(day_specific_preds, on='polygon', how='left')
     
     numeric_cols = merged_gdf.select_dtypes(include=np.number).columns
     merged_gdf[numeric_cols] = merged_gdf[numeric_cols].fillna(0)
 
-    if 'date' in merged_gdf.columns:
-        merged_gdf['date'] = merged_gdf['date'].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notnull(x) else 'N/A')
-
+    # FIX: Robust check to ensure NO Timestamp objects remain in the GeoDataFrame columns
+    for col in merged_gdf.columns:
+        # Check for datetime dtypes
+        if pd.api.types.is_datetime64_any_dtype(merged_gdf[col]):
+            merged_gdf[col] = merged_gdf[col].dt.strftime('%Y-%m-%d').fillna('')
+        # Check for object columns that might contain Timestamps (like 'date' if not fixed above)
+        elif merged_gdf[col].dtype == 'object':
+             merged_gdf[col] = merged_gdf[col].astype(str).replace({'NaT': '', 'nan': '', 'None': ''})
     # --- Create the Map ---
     map_center = [merged_gdf.unary_union.centroid.y, merged_gdf.unary_union.centroid.x]
     # Initialize map with OpenStreetMap as the default
@@ -160,13 +172,13 @@ def create_prediction_map(prediction_date: Union[str, datetime]):
     folium.GeoJson(
         merged_gdf,
         style_function=lambda feature: {
-            'fillColor': likelihood_colormap(feature['properties']['event_adjusted_score']),
+            'fillColor': likelihood_colormap(feature['properties']['confidence']),
             'color': 'black',
             'weight': 1,
             'fillOpacity': 0.5
         },
         tooltip=folium.GeoJsonTooltip(
-            fields=['polygon_number', 'event_adjusted_score'],
+            fields=['polygon_number', 'confidence_str'],
             aliases=['Region:', 'Likelihood Score:'],
             localize=True
         )
