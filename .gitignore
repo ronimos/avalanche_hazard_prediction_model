@@ -86,3 +86,6 @@ venv.bak/
 .vscode/
 .idea/
 *.DS_Store
+# Server-only files
+/data/raw/BC_Polygons_old.json
+/post_prossesing_full_codebase.txt
