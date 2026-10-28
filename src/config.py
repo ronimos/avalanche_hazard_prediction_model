@@ -176,7 +176,7 @@ API_CONFIG = {
 
 # --- DATA PROCESSING CONFIGURATION ---
 PROCESSING_CONFIG = {
-    "target_years": [2023, 2024],
+    "target_years": [2023, 2024, 2025],  # Water years (Oct-Sep, labeled by the starting year)
     "geoprojection_epsg": "EPSG:3310",
 }
 

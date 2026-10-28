@@ -226,7 +226,11 @@ def create_download_manifest() -> Optional[pd.DataFrame]:
     if manifest_path.exists():
         logging.info(f"Loading existing download manifest from '{manifest_path}'")
         try:
-            return pd.read_csv(manifest_path)
+            cached_manifest = pd.read_csv(manifest_path)
+            cached_years = set(cached_manifest['water_year'].dropna().astype(int))
+            if cached_years == set(config.PROCESSING_CONFIG["target_years"]):
+                return cached_manifest
+            logging.info(f"Existing manifest covers water years {sorted(cached_years)}, not {config.PROCESSING_CONFIG['target_years']}. Recreating it.")
         except Exception as e:
             logging.warning(f"Could not read existing manifest file: {e}. Recreating it.")
 
@@ -382,6 +386,24 @@ def download_smet_files(info_df: pd.DataFrame):
             logging.error(f"Failed to download from {download_url}: {e}")
             
             
+def avalanche_records_cover_target_years(records: List[Dict[str, Any]]) -> bool:
+    """
+    Checks whether cached avalanche records extend into the latest water year
+    listed in `PROCESSING_CONFIG["target_years"]`.
+
+    Args:
+        records (List[Dict[str, Any]]): Raw avalanche observation records.
+
+    Returns:
+        bool: True if the newest record falls in (or after) the latest target year.
+    """
+    observed = pd.to_datetime([r.get('observed_at') for r in records], errors='coerce', utc=True).dropna()
+    if observed.empty:
+        return False
+    newest = observed.max()
+    newest_water_year = newest.year if newest.month >= 10 else newest.year - 1
+    return newest_water_year >= max(config.PROCESSING_CONFIG["target_years"])
+
 def load_or_fetch_avalanche_data(file_path: Path) -> List[Dict[str, Any]]:
     """
     Loads raw avalanche observation records from a local JSON file. If the file
@@ -398,7 +420,10 @@ def load_or_fetch_avalanche_data(file_path: Path) -> List[Dict[str, Any]]:
     if file_path.exists():
         logging.info(f"Loading raw avalanche data from '{file_path}'.")
         with file_path.open('r', encoding='utf-8') as f:
-            return json.load(f)
+            cached_records = json.load(f)
+        if avalanche_records_cover_target_years(cached_records):
+            return cached_records
+        logging.info("Cached avalanche records do not reach the latest target water year. Re-fetching from the API.")
 
     all_records = []
     session = requests.Session()
