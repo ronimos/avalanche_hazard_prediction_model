@@ -91,7 +91,7 @@ PATHS = {
     # --- Raw Input Data (should not be modified by scripts) ---
     "RAW_DATA": {
         "polygons": DATA_DIR / "raw" / "BC_Polygons.geojson",
-        "snowpack_locations": DATA_DIR / "raw" / "SnowPackLocations_from_pro_files.csv",
+        "snowpack_locations": DATA_DIR / "raw" / "SnowPackLocations.csv",
         "danger_ratings": DATA_DIR / "external" / "danger_rating_by_polygon.csv",
     },
 
