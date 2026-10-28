@@ -45,6 +45,8 @@ dependencies = [
     "shapely>=2.1.1",
     # Not on PyPI yet; pinned to a reviewed commit
     "xsnow @ git+https://gitlab.com/avacollabra/postprocessing/xsnow.git@a84a4fb6963ff66ca289e69021a3cdecf184f3fc",
+    "pymc>=6.3",
+    "numpyro>=0.22",
 ]
 
 [project.optional-dependencies]
