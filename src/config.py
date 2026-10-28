@@ -108,6 +108,7 @@ PATHS = {
         "daily_avalanche_data": DATA_DIR / "processed" / "daily_avalanche_data.csv",
         "avalanche_observations": DATA_DIR / "processed" / "avalanche_observations.csv",
         "daily_polygon_activity": DATA_DIR / "processed" / "daily_polygon_activity.csv",
+        "snowpack_drivers": DATA_DIR / "processed" / "snowpack_drivers.csv",
         "download_manifest": DATA_DIR / "processed" / "snowpack_download_manifest.csv",
         "prediction_manifest": DATA_DIR / "processed" / "prediction_manifest.csv",
         "training_features": DATA_DIR / "processed" / "training_features.csv",

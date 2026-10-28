@@ -18,7 +18,9 @@ Three seasons have both avalanche observations and SNOWPACK output: 2023-24, 202
 | --- | --- | --- |
 | Avalanche observations | `data/raw/caic-avalanche-records-2026-10-28.csv` (CAIC export) | 11,199 rows, 2023-10-15 to 2026-10-27 |
 | Forecast polygons | `data/raw/BC_Polygons.geojson` | 147 polygons |
-| Snowpack and weather drivers | `/ssd/snowpack/fcst/<season>/zone<NNN>/<station>/<station>_res.pro` and `.smet` | One SNOWPACK station per polygon, nearest to its centroid |
+| Snowpack and weather drivers | `/ssd/snowpack/fcst/<season>/zone<NNN>/<station>/<station>_res.smet` | One SNOWPACK station per polygon, nearest to its centroid; 107,900 polygon-days over three seasons |
+
+Zone folders changed in 2025 (90 zones before, 134 after), so the same station sits in a different zone folder by season; stations are looked up by ID.
 
 Each row of the export is one avalanche, or a group of similar avalanches whose count is in the `#` column. Rows that share an observation ID come from the same report, so they are kept as separate records.
 
@@ -63,22 +65,29 @@ Label choices that differ from the previous pipeline:
 
 ## Features
 
-The model uses about 12 drivers chosen for known avalanche physics, down from the previous pipeline's 595 (3,624 feature pairs with |r| > 0.95, against 256 event days). Most come straight from SNOWPACK's daily `.smet` summaries, so they need no layer-by-layer parsing of the `.pro` profile.
+The model uses 14 drivers chosen for known avalanche physics, down from the previous pipeline's 595 (3,624 feature pairs with |r| > 0.95, against 256 event days). All come from SNOWPACK's `.smet` summaries, read with [xsnow](https://gitlab.com/avacollabra/postprocessing/xsnow) (`src/snowpack_drivers.py`), so none need layer-by-layer parsing of the `.pro` profile. The `.smet` timestamps are UTC every 6 hours; they are converted to Mountain time and grouped by local date.
 
 | Driver | `.smet` fields | Daily summary |
 | --- | --- | --- |
-| New snow | `HN24`, `HN72_24` | Depth over 24 h and 72 h (cm) |
-| Load | `HNW24`, `SWE` | 24 h water equivalent; 3-day change in SWE (kg m-2) |
-| Wind loading | `wind_trans24`, `VW`, `VW_drift` | 24 h wind transport; mean and drift wind speed (m s-1) |
-| Warming and wetting | `TA`, `MS_Rain`, `MS_Water` | Max air temperature and 24 h change (°C); rain; liquid water in the snowpack |
-| Natural stability | `Sn`, `zSn` | Minimum natural stability index Sn38 and its depth |
-| Skier stability | `Ss`, `zSs` | Minimum skier stability index Sk38 and its depth |
-| Snow depth | `HS_mod` | Modeled snow height (cm) |
+| New snow | `HN24` | Depth over the last 24 h, and summed over 3 days (m) |
+| Load | `SWE` | Change over 24 h and over 3 days (kg m-2) |
+| Wind | `VW` | Daily mean and maximum wind speed (m s-1) |
+| Warming and wetting | `TA`, `MS_Rain`, `MS_Water` | Max air temperature and its 24 h change (°C); daily rain; liquid water in the snowpack |
+| Natural stability | `Sn`, `zSn` | Daily minimum of Sn38 over the four slopes, and its depth |
+| Skier stability | `Ss`, `zSs` | Daily minimum of Sk38 over the four slopes, and its depth |
+| Snow depth | `HS_mod` | Modeled snow height (m) |
 | Season | (date) | Day of season, as a smooth term |
+
+Some fields can't be used as they are in these runs:
+
+- `wind_trans24` is always 0 and `VW_drift` always equals `VW`, so wind loading is represented by wind speed alone.
+- `HN72_24` equals `HN24` in all but 23 of 1,018 timesteps, so 72 h new snow is summed from daily `HN24`.
+- The 24 h precipitation field changed between seasons (`PSUM24`, total precipitation, before 2025; `HNW24`, new-snow water equivalent, from 2025), so load comes from SWE change, which is the same in every season.
+- Stability indices are capped at 6, the value SNOWPACK writes when it finds no weak layer to evaluate. The cap appears almost only where snow is under 0.5 m deep: 22%, 13% and 46% of December to March polygon-days for Sk38 in 2023-24, 2024-25 and 2025-26. Capped values get an indicator rather than being treated as measured stability.
 
 Each SNOWPACK station runs five simulations: a flat field (`<station>_res`) and four 38° slopes facing north, east, south and west (`<station>1_res` to `<station>4_res`), as stated in the `SlopeAngle` and `SlopeAzi` file headers. Loading and weather drivers come from the flat field. Stability drivers take the least stable of the four slopes, because one unstable aspect is enough to produce an avalanche.
 
-Missing values stay missing. The previous pipeline replaced them with 0, which made "no weak layer found" and "no data" look like a measured zero. The model will use an explicit missing indicator where a driver can be absent, such as a stability minimum before the snowpack forms. Drivers are standardized using the training seasons only.
+Missing values stay missing. The previous pipeline replaced them with 0, which made "no weak layer found" and "no data" look like a measured zero. An explicit missing indicator is used where a driver can be absent, such as a stability minimum before the snowpack forms (4% of November to May polygon-days for Sn38, 2% for Sk38). Drivers are standardized using the training seasons only.
 
 ## Model
 
@@ -138,7 +147,7 @@ Posterior predictive checks compare simulated and observed records by season, by
 Work happens on the `dev` branch. The production forecast keeps running the current models until the new one beats both baselines on held-out seasons.
 
 - [x] Load the CAIC export and assign records to polygons (`src/avalanche_observations.py`, with tests)
-- [ ] Build the daily driver table from `.smet` files for 2023-24 to 2025-26
+- [x] Build the daily driver table from `.smet` files for 2023-24 to 2025-26 (`src/snowpack_drivers.py`, with tests)
 - [ ] Build the evaluation harness and both baselines
 - [ ] Fit the occupancy-detection model and run posterior checks
 - [ ] Connect the model to `predict.py`, keeping the current output format
@@ -148,4 +157,4 @@ Open questions:
 - **Observer access by polygon.** Highway paths, ski-area boundaries and trailhead locations would give the detection model its strongest covariates. Is there a layer for these?
 - **Detection prior.** Which polygons can be treated as near-fully monitored?
 - **Committing the export.** The CSV includes free-text comments and descriptions. Should it go into the public GitHub repo, or stay on the server only?
-- **Reading SNOWPACK output.** [xsnow](https://gitlab.com/avacollabra/postprocessing/xsnow) could replace the custom `.pro` reader. It is licensed AGPL-3.0, while this repo is MIT.
+- **Thin 2025-26 snowpack.** Median November to May modeled snow depth was 0.27 m, against 0.59 m in 2023-24 and 0.48 m in 2024-25. Confirm this matches observations and is not a change in the forecast runs.

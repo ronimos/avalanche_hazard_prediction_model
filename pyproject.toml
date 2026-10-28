@@ -43,6 +43,8 @@ dependencies = [
     "folium>=0.20.0",
     "branca>=0.8.1",
     "shapely>=2.1.1",
+    # Not on PyPI yet; pinned to a reviewed commit
+    "xsnow @ git+https://gitlab.com/avacollabra/postprocessing/xsnow.git@a84a4fb6963ff66ca289e69021a3cdecf184f3fc",
 ]
 
 [project.optional-dependencies]
