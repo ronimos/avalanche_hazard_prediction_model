@@ -97,8 +97,8 @@ The model is a Bayesian hierarchical occupancy-detection model. Ecologists use t
 \begin{aligned}
 z_{p,t} &\sim \mathrm{Bernoulli}(\psi_{p,t}) && \text{avalanche occurred}\\
 y_{p,t} \mid z_{p,t} &\sim \mathrm{Bernoulli}(z_{p,t}\, d_{p,t}) && \text{avalanche recorded}\\
-\operatorname{logit} \psi_{p,t} &= \alpha_{p} + f(\text{day of season}) + \boldsymbol{\beta}^{\top} \mathbf{x}_{p,t} + \gamma_{r[p],t}\\
-\operatorname{logit} d_{p,t} &= \delta_{p} + \eta_{s} + \boldsymbol{\lambda}^{\top} \mathbf{w}_{p,t}
+\operatorname{logit} \psi_{p,t} &= a_0 + f(\text{day of season}) + \boldsymbol{\beta}^{\top} \mathbf{x}_{p,t} + \gamma_{r[p],t}\\
+\operatorname{logit} d_{p,t} &= \delta_{p} + \eta_{s} + \lambda\, \text{weekend or holiday}_{t}
 \end{aligned}
 ```
 
@@ -108,19 +108,19 @@ Snowpack drivers only move ψ and observer effort only moves d, which is what le
 
 **Occurrence** (ψ) depends on the snowpack and weather drivers x from the Features table:
 
-- α\_p is a polygon baseline, drawn from its zone's mean, which is drawn from the state mean. Polygons with few records are pulled toward their zone, and polygons with none get the zone value. This lets the model predict all 147 polygons.
+- a\_0 is a statewide intercept. Occurrence differs between polygons only through the drivers (see below for why).
 - f is a smooth seasonal curve.
-- γ\_{r,t} is a shared effect for mountain range r on day t. A storm cycle raises avalanche probability across a whole range at once, so days within a range are not treated as independent.
+- γ\_{r,t} is a shared effect for forecast region r (the 11 CAIC regions) on day t. A storm cycle raises avalanche probability across a whole region at once, so days within a region are not treated as independent. Its value on a future day is unknown, so forecasts integrate over it.
 
 **Detection** (d) depends on observer-effort covariates w, which are kept separate from the snowpack drivers:
 
-- δ\_p is a polygon access level: highway corridors and ski-area boundaries are watched daily, remote polygons rarely.
-- η\_s is a season-level reporting effort, which absorbs changes in field programs between seasons.
-- w holds day-level factors: weekend or holiday, and visibility (storm days hide debris).
+- δ\_p is a polygon reporting level, drawn from its region's mean, which is drawn from a statewide mean μ\_d. Polygons with few records are pulled toward their region, and every polygon gets a value. Highway corridors and ski-area boundaries are watched daily and remote polygons rarely, so this is where most of the difference between polygons belongs.
+- η\_s is a season-level reporting effort with a fixed N(0, 0.5) prior. Two training seasons can't estimate the spread of season effects (estimating it produced a funnel and divergent transitions). A new season draws from the same prior.
+- λ is the effect of weekends, federal holidays and December 24 to January 1. Visibility is not included: the only storm measures are snowfall and wind, which are occurrence drivers.
 
-**What the model can and cannot separate.** With one report stream per polygon-day, ψ and d are only separately estimable because they depend on different covariates and because detection gets an informative prior. Without that, the model still ranks days and polygons by avalanche likelihood correctly, but the absolute probability is uncertain. Priors on detection will come from polygons with near-complete monitoring, such as highway avalanche paths.
+**What the model can and cannot separate.** With one report stream per polygon-day and records this rare, logit(ψ·d) is close to logit ψ + logit d. A polygon effect on occurrence and one on detection can't be told apart, so the polygon baseline sits in detection only. Until access data separates them, differences in avalanche terrain between polygons are absorbed into δ\_p. The statewide detection level μ\_d has a prior with median 0.2 (normal on the logit scale, sd 0.75), which anchors the occurrence intercept. Rankings of days don't depend on that prior; absolute probabilities do. A better detection prior will come from polygons with near-complete monitoring, such as highway avalanche paths.
 
-**Fitting.** The model is fit with NUTS in PyMC, with weakly informative priors on coefficients (normal, sd 1 on standardized drivers) and half-normal priors on group standard deviations. Fits pass only with R-hat below 1.01, adequate effective sample size and no divergent transitions.
+**Fitting.** The model (`src/bayes_model.py`) is fit with NUTS in PyMC using the NumPyro sampler: 4 chains, 1,000 tuning and 500 kept draws, target acceptance 0.95. Coefficients get normal priors with sd 1 on standardized drivers, and group standard deviations get half-normal priors. A fit passes with R-hat below 1.01, bulk effective sample size above 400 and no divergent transitions. One fold takes about 8 minutes on 62,000 polygon-days.
 
 ## Evaluation
 
@@ -164,6 +164,38 @@ Two caveats:
 
 Posterior predictive checks compare simulated and observed records by season, by polygon group and by month. Reporting effort is expected to differ between seasons, so the check confirms that η\_s absorbs it.
 
+### Bayesian model results
+
+The occupancy-detection model scores the same as the driver logistic regression on held-out seasons (`results/evaluation/`):
+
+| Held-out season | Within-polygon AUC, drivers | Within-polygon AUC, Bayesian | Paired difference (95% interval) | Average precision, Bayesian | Max R-hat |
+| --- | --- | --- | --- | --- | --- |
+| 2023-24 | 0.789 | 0.789 | 0.000 (−0.004 to 0.004) | 0.27 | 1.007 |
+| 2024-25 | 0.774 | 0.771 | −0.003 (−0.010 to 0.003) | 0.28 | 1.011 |
+| 2025-26 | 0.830 | 0.830 | 0.000 (−0.010 to 0.011) | 0.28 | 1.009 |
+
+All three fits had no divergent transitions. The 2024-25 fold misses the R-hat bar slightly (1.011, on polygon detection levels), so it needs longer chains.
+
+The structure doesn't improve forecasts yet, for two reasons:
+
+- **Ranking comes from the same drivers.** Within a polygon, both models rank days by the same linear combination of drivers. The detection side adds only a weekend effect, which matters little for ranking.
+- **The storm-day effect can't be forecast.** γ has a large spread (sd 1.4 to 1.8 on the logit scale), so regional avalanche cycles explain much of what the drivers miss. But γ for a future day is unknown, and forecasts integrate it out.
+
+What the model does provide: an occurrence probability separate from reporting, uncertainty on every prediction, and an estimate for all 147 polygons, including the 39 with no records.
+
+Driver effects (posterior means on standardized drivers) that are consistent across all three folds:
+
+| Driver | Effect on occurrence, by held-out fold |
+| --- | --- |
+| Lowest natural stability Sn38 | −0.65 to −1.00: lower stability, more avalanches |
+| New snow over 72 h | +0.54 to +0.98 |
+| Daily maximum wind | +0.11 to +0.37 |
+| Daily maximum air temperature | −0.16 to −0.46 |
+| 24 h warming | +0.14 to +0.23 |
+| Natural stability at the cap of 6 | +0.96 to +1.22, offsetting the linear Sn38 term where no weak layer exists |
+
+Skier stability Sk38 and its depth change sign between folds, so their effects are not reliable.
+
 ## Status and open questions
 
 Work happens on the `dev` branch. The production forecast keeps running the current models until the new one beats both baselines on held-out seasons.
@@ -171,7 +203,9 @@ Work happens on the `dev` branch. The production forecast keeps running the curr
 - [x] Load the CAIC export and assign records to polygons (`src/avalanche_observations.py`, with tests)
 - [x] Build the daily driver table from `.smet` files for 2023-24 to 2025-26 (`src/snowpack_drivers.py`, with tests)
 - [x] Build the evaluation harness and both baselines (`src/evaluation.py`, with tests)
-- [ ] Fit the occupancy-detection model and run posterior checks
+- [x] Fit the occupancy-detection model (`src/bayes_model.py`, with tests)
+- [ ] Run posterior predictive checks, and rerun the 2024-25 fold with longer chains
+- [ ] Make the storm-day effect forecastable: recent recorded activity in the region is known at forecast time
 - [ ] Connect the model to `predict.py`, keeping the current output format
 
 Open questions:

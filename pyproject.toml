@@ -73,3 +73,4 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["slow: fits a Bayesian model (about a minute); skip with -m \"not slow\""]

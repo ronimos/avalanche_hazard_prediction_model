@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+from sklearn.metrics import roc_auc_score
 
 import evaluation as ev
 import likelihood_data as ld
@@ -82,3 +83,31 @@ def test_baselines_fit_and_predict_probabilities():
         p = make_model().fit(table).predict(table)
         assert p.shape == (len(table),)
         assert ((p > 0) & (p < 1)).all()
+
+
+def _random_predictions(seed=0, polygons=5, days=60):
+    rng = np.random.default_rng(seed)
+    dates = pd.date_range("2024-12-01", periods=days)
+    df = pd.DataFrame([(p, d) for p in range(polygons) for d in dates], columns=["polygon", "date"])
+    df["season"] = 2024
+    df["p"] = rng.uniform(size=len(df))
+    df["y"] = (rng.uniform(size=len(df)) < df["p"] * 0.3).astype(int)
+    return df
+
+
+def test_fast_aucs_match_sklearn():
+    df = _random_predictions()
+
+    assert ev._rank_auc(df["y"].to_numpy(), df["p"].to_numpy()) == pytest.approx(roc_auc_score(df["y"], df["p"]))
+    assert ev._fast_within_polygon_auc(df["polygon"].to_numpy(), df["y"].to_numpy(), df["p"].to_numpy()) == pytest.approx(ev.within_polygon_auc(df))
+
+
+def test_bootstrap_is_paired_and_brackets_the_estimate():
+    a = _random_predictions()
+    b = a.assign(p=a["p"] ** 2)  # same ranking, different calibration
+
+    out = ev.block_bootstrap({"a": a, "b": b}, reference="a", n_boot=50).set_index(["model", "metric"])
+
+    assert out.loc[("b - a", "auc"), ["estimate", "ci_low", "ci_high"]].abs().max() < 1e-12
+    row = out.loc[("a", "brier")]
+    assert row["ci_low"] <= row["estimate"] <= row["ci_high"]
