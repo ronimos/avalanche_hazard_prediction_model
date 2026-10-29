@@ -30,7 +30,7 @@ Author: Ron Simenhois
 """
 import argparse
 import logging
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -56,8 +56,9 @@ class SklearnModel:
         self.pipeline = pipeline
         self.columns = columns
 
-    def fit(self, df: pd.DataFrame) -> "SklearnModel":
-        self.pipeline.fit(df[self.columns], df["y"])
+    def fit(self, df: pd.DataFrame, sample_weight: Optional[np.ndarray] = None) -> "SklearnModel":
+        fit_params = {} if sample_weight is None else {f"{self.pipeline.steps[-1][0]}__sample_weight": sample_weight}
+        self.pipeline.fit(df[self.columns], df["y"], **fit_params)
         return self
 
     def predict(self, df: pd.DataFrame) -> np.ndarray:

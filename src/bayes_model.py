@@ -10,7 +10,9 @@ and to be reported (probability d):
     y[p,t] ~ Bernoulli(psi[p,t] * d[p,t])
     logit psi = a0 + f(day of season) + beta . x[p,t] + gamma[region, t]
     logit d   = delta[p] + eta[season] + lambda * weekend_or_holiday[t]
-    eta[s]    ~ Normal(0, 0.5), the same prior used for an unseen season
+    eta[s]    ~ Normal(0, 0.5), the same prior used for an unseen season; a season
+                that is partly in the training data (mid-season retraining)
+                keeps its fitted effect
     delta[p]  = mu_d + region effect + polygon effect
 
 Identifiability. With one report stream per polygon-day and rare records,
@@ -57,6 +59,9 @@ DETECTION_PRIOR_SD = 0.75
 # Season-to-season variation in reporting effort, on the logit scale
 SEASON_EFFECT_SD = 0.5
 
+# Quadrature nodes for averaging over the unknown storm effect of a region-day
+STORM_QUADRATURE_NODES = 15
+
 
 def weekend_or_holiday(dates: pd.Series) -> np.ndarray:
     """1 on Saturdays, Sundays, US federal holidays and Dec 24 to Jan 1, else 0."""
@@ -100,6 +105,7 @@ class OccupancyDetectionModel:
         X, B, polygon, region, weekend = self._design(df, fit=True)
         region_day, region_days = pd.factorize(pd.MultiIndex.from_arrays([region, df["date"].to_numpy()]))
         season, seasons = pd.factorize(df["season"])
+        self._seasons = pd.Index(seasons)
         y = df["y"].to_numpy()
         logging.info(f"Fitting occupancy-detection model on {len(df)} polygon-days ({y.sum()} records), "
                      f"{X.shape[1]} drivers, {len(region_days)} region-days, seasons {list(seasons)}.")
@@ -153,11 +159,16 @@ class OccupancyDetectionModel:
         post = idata.posterior.to_dataset().stack(sample=("chain", "draw"))
         keep = np.random.default_rng(self.seed).choice(post.sizes["sample"], size=min(self.n_predict_draws, post.sizes["sample"]), replace=False)
         self._post = {name: np.asarray(post[name].isel(sample=keep).transpose("sample", ...))
-                      for name in ["a0", "w_season", "beta", "sigma_gamma", "delta", "lambda_weekend"]}
+                      for name in ["a0", "w_season", "beta", "sigma_gamma", "delta", "lambda_weekend", "eta"]}
 
     def _predict_parts(self, df: pd.DataFrame):
-        """Posterior-mean occurrence and record probabilities, integrating over unseen region-day and season effects."""
+        """
+        Posterior-mean occurrence and record probabilities, integrating over unseen region-day effects
+        and the effect of a season the model wasn't fit on.
+        """
         X, B, polygon, region, weekend = self._design(df)
+        season = self._seasons.get_indexer(df["season"])
+        seen = season >= 0
         region_day, region_days = pd.factorize(pd.MultiIndex.from_arrays([region, df["date"].to_numpy()]))
         rng = np.random.default_rng(self.seed + 1)
         post = self._post
@@ -165,7 +176,7 @@ class OccupancyDetectionModel:
         record_sum = np.zeros(len(df))
         for s in range(len(post["a0"])):
             gamma = rng.normal(0.0, post["sigma_gamma"][s], size=len(region_days))[region_day]
-            eta = rng.normal(0.0, SEASON_EFFECT_SD)
+            eta = np.where(seen, post["eta"][s][season], rng.normal(0.0, SEASON_EFFECT_SD))
             psi = expit(post["a0"][s] + B @ post["w_season"][s] + X @ post["beta"][s] + gamma)
             d = expit(post["delta"][s][polygon] + eta + post["lambda_weekend"][s] * weekend)
             psi_sum += psi
@@ -182,6 +193,74 @@ class OccupancyDetectionModel:
     def predict_occurrence(self, df: pd.DataFrame) -> np.ndarray:
         """Probability that an avalanche occurs (psi), whether or not it is reported."""
         return self._predict_parts(df)[0]
+
+    def _linear_parts(self, df: pd.DataFrame, s: int, eta: np.ndarray):
+        """Occurrence logit without the region-day effect, and detection probability, for posterior draw s."""
+        X, B, polygon, _, weekend = self._design(df)
+        post = self._post
+        logit_psi = post["a0"][s] + B @ post["w_season"][s] + X @ post["beta"][s]
+        d = expit(post["delta"][s][polygon] + eta + post["lambda_weekend"][s] * weekend)
+        return logit_psi, d
+
+    def _season_effect(self, df: pd.DataFrame, s: int, rng: np.random.Generator) -> np.ndarray:
+        """Season effect for draw s: fitted for a season in the training data, else one draw from the prior."""
+        season = self._seasons.get_indexer(df["season"])
+        return np.where(season >= 0, self._post["eta"][s][season], rng.normal(0.0, SEASON_EFFECT_SD))
+
+    def predict_draws(self, df: pd.DataFrame):
+        """
+        Record and occurrence probabilities for each posterior draw.
+
+        The storm effect of a region-day is weather, not something the model is
+        unsure about, so each draw averages over it (Gauss-Hermite quadrature).
+        The spread across draws is then the model's own uncertainty, including
+        the reporting level of a season it hasn't seen.
+
+        Returns:
+            Tuple[np.ndarray, np.ndarray]: record and occurrence probabilities,
+                                           each (draws, rows).
+        """
+        nodes, weights = np.polynomial.hermite_e.hermegauss(STORM_QUADRATURE_NODES)
+        weights = weights / weights.sum()
+        rng = np.random.default_rng(self.seed + 2)
+        n = len(self._post["a0"])
+        record, occurrence = np.empty((n, len(df))), np.empty((n, len(df)))
+        for s in range(n):
+            logit_psi, d = self._linear_parts(df, s, self._season_effect(df, s, rng))
+            psi = sum(w * expit(logit_psi + self._post["sigma_gamma"][s] * z) for z, w in zip(nodes, weights))
+            occurrence[s], record[s] = psi, psi * d
+        return record, occurrence
+
+    def predict_interval(self, df: pd.DataFrame, quantiles=(0.1, 0.5, 0.9)) -> pd.DataFrame:
+        """Posterior mean and quantiles of the record and occurrence probabilities, one row per polygon-day."""
+        record, occurrence = self.predict_draws(df)
+        out = {"p_record": record.mean(axis=0), "p_occurrence": occurrence.mean(axis=0)}
+        for q in quantiles:
+            out[f"p_record_q{int(q * 100):02d}"] = np.quantile(record, q, axis=0)
+            out[f"p_occurrence_q{int(q * 100):02d}"] = np.quantile(occurrence, q, axis=0)
+        return pd.DataFrame(out, index=df.index)
+
+    def simulate_records(self, df: pd.DataFrame, group: np.ndarray, n_groups: int) -> np.ndarray:
+        """
+        Posterior predictive number of records per group, for checking the model against what was recorded.
+
+        Each draw takes new storm effects for every region-day and, for an
+        unseen season, a new season effect, then simulates the records.
+
+        Returns:
+            np.ndarray: Simulated record counts, (draws, n_groups).
+        """
+        _, _, _, region, _ = self._design(df)
+        region_day, region_days = pd.factorize(pd.MultiIndex.from_arrays([region, df["date"].to_numpy()]))
+        rng = np.random.default_rng(self.seed + 3)
+        n = len(self._post["a0"])
+        counts = np.empty((n, n_groups))
+        for s in range(n):
+            logit_psi, d = self._linear_parts(df, s, self._season_effect(df, s, rng))
+            gamma = rng.normal(0.0, self._post["sigma_gamma"][s], size=len(region_days))[region_day]
+            y = rng.uniform(size=len(df)) < expit(logit_psi + gamma) * d
+            counts[s] = np.bincount(group, weights=y, minlength=n_groups)
+        return counts
 
     def driver_effects(self) -> pd.DataFrame:
         """Posterior summary of the occurrence coefficients, labeled by driver."""

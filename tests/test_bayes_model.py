@@ -42,3 +42,14 @@ def test_recovers_driver_effect_and_predicts_probabilities(simulated):
     assert p.shape == (len(simulated),)
     assert ((p > 0) & (p < 1)).all()
     assert (model.last_occurrence >= p).all()
+
+    intervals = model.predict_interval(simulated)
+    assert (intervals["p_record_q10"] <= intervals["p_record_q90"]).all()
+    assert (intervals["p_record"] <= intervals["p_occurrence"]).all()
+    # Averaging over storm effects matches the sampled mean prediction closely
+    assert np.corrcoef(intervals["p_record"], p)[0, 1] > 0.99
+
+    counts = model.simulate_records(simulated, np.zeros(len(simulated), dtype=int), 1)
+    assert counts.shape == (100, 1)
+    lo, hi = np.quantile(counts, [0.01, 0.99])
+    assert lo <= simulated["y"].sum() <= hi

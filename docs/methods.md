@@ -204,7 +204,7 @@ Avalanche cycles last several days and cover whole regions, so recorded activity
 - the number of D2+ avalanches recorded in its forecast region (log of 1 + count);
 - the number of avalanches of any size recorded in its region (log of 1 + count).
 
-The lag decides what is available in practice. The forecast runs around 08:16 and predicts the next day. At lag 1, the window ends on the day the forecast is issued, so it would use reports from that same morning and day, which aren't in yet. Lag 2, through the previous day, is the earliest realistic setting, and even then some of that day's reports arrive later. The export has no report timestamps to measure the delay.
+The lag decides what is available in practice. Forecasts for day t are published by 4 PM on day t−1, the forecasters meet at 1 PM, and the model run should finish by noon. Most reports come in on the afternoon and evening of the day the avalanche happens. So at noon on t−1, reports through t−2 are mostly in and reports for t−1 mostly are not. At lag 1 the window ends on t−1 and would use reports that haven't arrived. Lag 2, through t−2, matches what is available, and is the default.
 
 Gain from the activity features over the snowpack drivers alone, D2+ label (paired 95% intervals from the block bootstrap):
 
@@ -214,9 +214,71 @@ Gain from the activity features over the snowpack drivers alone, D2+ label (pair
 | 2024-25 | +0.030 (0.008 to 0.055) | +0.016 (0.001 to 0.034) | +0.040 (0.020 to 0.061) | +0.019 (−0.001 to 0.040) |
 | 2025-26 | +0.035 (0.006 to 0.069) | +0.015 (−0.004 to 0.034) | +0.052 (0.015 to 0.085) | +0.018 (−0.012 to 0.042) |
 
-At lag 1 the gain is clear in every season. At the operational lag 2 it is about half as large, and only two of the six comparisons exclude zero. Activity is worth most if reports from the previous day arrive before the forecast runs.
+At lag 1 the gain is clear in every season. At the operational lag 2 it is about half as large, and only two of the six comparisons exclude zero. The lag-1 numbers are an upper bound that the noon run can't reach.
 
 The Bayesian model with the same features (lag 2) converged in all three folds (R-hat at most 1.010, no divergent transitions) and again matches the logistic regression: paired within-polygon AUC differences are 0.000 in every season. Regional D2+ activity has the largest effect (posterior mean +0.32 to +0.47 on the standardized count), the polygon's own recent record adds +0.16 to +0.21, and all-size regional activity adds nothing once D2+ is in. The spread of the storm-day effect barely shrinks (sd 1.38 to 1.71, against 1.41 to 1.77 without activity), so 2-day-old reports explain little of the regional cycles.
+
+### Bayesian model and logistic regression by polygon group
+
+Overall the two models rank polygon-days the same. Split by how many D2+ events a polygon had in the training seasons, they differ only where there is no data (activity features, lag 2, Bayesian minus logistic, paired 95% intervals):
+
+| Polygon group | Within-polygon AUC difference | Pooled AUC difference | Predicted / recorded events, logistic | Predicted / recorded events, Bayesian |
+| --- | --- | --- | --- | --- |
+| No training events (12, 15, 2 events) | +0.006 to +0.025, all intervals include 0 | +0.048, +0.062, +0.045; the last two exclude 0 | 4.7, 2.2, 10.1 | 2.0, 1.0, 5.2 |
+| 1–10 training events | −0.007 to 0.000 | +0.001, +0.003, −0.014 | 0.8, 0.8, 1.4 | 1.0, 1.0, 2.3 |
+| Over 10 training events | −0.001 to +0.001 | −0.002 to +0.001 | 1.0, 0.9, 1.2 | 1.0, 1.0, 1.5 |
+
+In polygons with no training events, the Bayesian model is better at telling which of them will get a report, and over-predicts about half as much. That comes from pooling polygons within a region and from the separate reporting term. It doesn't rank days within those polygons any better. Lag 1 gives the same pattern.
+
+A hybrid that uses the Bayesian model only for polygons with no training events improves on logistic regression by +0.001 to +0.005 in pooled AUC and by at most 0.002 in average precision, with no loss anywhere. Those polygons hold few events, so the overall gain is small. It was dropped as not worth running two models in production.
+
+### Prediction intervals and posterior predictive checks
+
+The Bayesian model can give each polygon-day a range as well as a probability (`OccupancyDetectionModel.predict_interval`). Each posterior draw averages over the unknown storm effect of the region-day (Gauss-Hermite quadrature), because that is weather, not model uncertainty. The spread across draws is what the model doesn't know: its coefficients, the polygon's reporting level and, for a new season, the season's reporting level. The model reports intervals for both the probability that an avalanche is recorded and the probability that one occurs.
+
+The ratio of the 90% to the 10% quantile of the record probability has a median of 3.2 in polygons with over 10 training events, 8.6 with 1–10, and 74 with none. The model knows where it has no data.
+
+The absolute probability of occurrence rests on the detection prior (median 0.2). In polygons with no training events, mean occurrence is 0.088 against a record probability of 0.0013. The two can't be separated from these data, so occurrence probabilities are useful for ranking but should not be presented as calibrated.
+
+Posterior predictive check (`src/uncertainty.py`): the record counts per polygon group and month, simulated from the held-out-season fits (all converged, R-hat at most 1.010, no divergences), compared with what was recorded:
+
+| Held-out seasons | Polygon group | Months inside 50% interval | Months inside 80% interval |
+| --- | --- | --- | --- |
+| 2023-24 and 2024-25 | No training events | 79% | 100% |
+| 2023-24 and 2024-25 | 1–10 | 86% | 93% |
+| 2023-24 and 2024-25 | Over 10 | 79% | 93% |
+| 2025-26 | No training events | 71% | 100% |
+| 2025-26 | 1–10 | 14% | 43% |
+| 2025-26 | Over 10 | 29% | 29% |
+
+In ordinary seasons the intervals are somewhat conservative. 2025-26, the worst season in about 50 years across much of Colorado, falls below the predicted range in November, December, January, April and May. The season's reporting effect allows for ordinary differences between seasons, not a season this far outside the training data. In May, polygons with over 10 training events had more D2+ records than predicted in both other seasons (22 to 28 against medians of 11 to 18), which suggests the spring wet-snow drivers are missing something.
+
+### Mid-season retraining
+
+`src/retraining.py` replays each held-out season as if it were forecast live. Each model starts from the other seasons only and is retrained on a schedule from Dec 15. A retrain adds the current season's polygon-days up to 3 days before the retrain date, since the latest reports are still arriving. The new model then predicts the days until the next retrain. Every variant is scored on the same days (Dec 15 to May 31), against logistic regression with activity that is never retrained.
+
+Variants: logistic regression refit weekly or monthly; the same with the current season weighted 3×; the never-retrained model with only its overall level shifted to fit the season so far; and the Bayesian model refit monthly. Once a season is in the Bayesian model's training data, its own reporting effect is estimated instead of drawn from the prior, so a refit can move the season's level.
+
+Differences from the never-retrained logistic regression (paired 95% intervals, seasons 2023-24 / 2024-25 / 2025-26):
+
+| Variant | Within-polygon AUC | Pooled AUC | Predicted / recorded events |
+| --- | --- | --- | --- |
+| Never retrained (reference) | 0.775 / 0.765 / 0.824 | 0.904 / 0.909 / 0.942 | 1.06 / 0.93 / 1.21 |
+| Logistic, refit weekly | −0.006 / −0.008 / −0.006, intervals include 0 | +0.005 (0.003 to 0.007) / 0.000 / 0.000 | 1.05 / 0.92 / 1.12 |
+| Logistic, current season weighted 3× | −0.013 / −0.021 / −0.019, all exclude 0 | +0.005 / −0.002 / −0.003 | 1.04 / 0.91 / 1.07 |
+| Logistic, level shift only | 0.000 / −0.008 / −0.001 | 0.000 / −0.002 / 0.000 | 1.06 / 0.99 / 0.78 |
+| Bayesian, never retrained | −0.001 / 0.000 / −0.003 | +0.006 / +0.003 / 0.000 | 1.06 / 1.00 / 1.57 |
+| Bayesian, refit monthly | −0.006 / −0.011 (−0.019 to −0.002) / −0.010 | +0.010 (0.006 to 0.013) / +0.004 / −0.003 | 0.94 / 0.97 / 0.85 |
+
+Weekly and monthly logistic refits give the same results.
+
+Retraining doesn't help ranking. Pooled AUC gains are at most 0.01, and ranking days within a polygon, the part a forecaster acts on, gets slightly worse in every variant. The never-retrained model is already within about 20% of each season's total.
+
+Retraining does move the season's level, which matters only in a season like 2025-26. The never-retrained Bayesian model over-predicted December 2025 by 8.8× and January by 1.8×. Refit monthly, it was 4.1× and 1.0×, but then under-predicted February and March (0.6×), and April and May stayed 2.5 to 5× over. The logistic level shift behaves the same way. A season that far outside the training data isn't fixed by a few weeks of its own data.
+
+The Bayesian refits are also expensive: about 25 to 30 minutes each with three running at once. Ten of 18 finished with R-hat between 1.010 and 1.019, just over the target, though none had divergent transitions.
+
+Recommendation, to discuss: no mid-season retraining. Refit once before each season on all past seasons.
 
 ## Status and open questions
 
@@ -226,7 +288,9 @@ Work happens on the `dev` branch. The production forecast keeps running the curr
 - [x] Build the daily driver table from `.smet` files for 2023-24 to 2025-26 (`src/snowpack_drivers.py`, with tests)
 - [x] Build the evaluation harness and both baselines (`src/evaluation.py`, with tests)
 - [x] Fit the occupancy-detection model (`src/bayes_model.py`, with tests)
-- [ ] Run posterior predictive checks, and rerun the 2024-25 fold with longer chains
+- [x] Run posterior predictive checks and add prediction intervals (`src/uncertainty.py`)
+- [ ] Rerun the 2024-25 fold of the model without activity with longer chains
+- [x] Backtest mid-season retraining (`src/retraining.py`): not worth it for either model
 - [x] Add recent regional activity as a forecastable feature (lag 2 by default)
 - [ ] Connect the model to `predict.py`, keeping the current output format
 
@@ -235,5 +299,4 @@ Open questions:
 - **Observer access by polygon.** Highway paths, ski-area boundaries and trailhead locations would give the detection model its strongest covariates. Is there a layer for these?
 - **Detection prior.** Which polygons can be treated as near-fully monitored?
 - **Committing the export.** The CSV includes free-text comments and descriptions. Should it go into the public GitHub repo, or stay on the server only?
-- **Report delay.** Are most of the previous day's avalanche reports in by about 8 am? If so, lag 1 activity (the larger gain) could be used by running the forecast later in the morning.
-- **Thin 2025-26 snowpack.** Median November to May modeled snow depth was 0.27 m, against 0.59 m in 2023-24 and 0.48 m in 2024-25. Confirm this matches observations and is not a change in the forecast runs.
+- **Thin 2025-26 snowpack.** Median November to May modeled snow depth was 0.27 m, against 0.59 m in 2023-24 and 0.48 m in 2024-25. This is real: 2025-26 was the worst season in about 50 years across much of Colorado. Results for that season should carry less weight.
