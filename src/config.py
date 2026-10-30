@@ -92,7 +92,7 @@ PATHS = {
     "RAW_DATA": {
         "polygons": DATA_DIR / "raw" / "BC_Polygons.geojson",
         "snowpack_locations": DATA_DIR / "raw" / "SnowPackLocations.csv",
-        "danger_ratings": DATA_DIR / "external" / "danger_rating_by_polygon.csv",
+        "danger_ratings": DATA_DIR / "raw" / "danger_rating.csv",
         "avalanche_records": DATA_DIR / "raw" / "caic-avalanche-records-2026-10-28.csv",
     },
 

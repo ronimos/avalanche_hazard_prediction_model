@@ -1,0 +1,161 @@
+import numpy as np
+import pandas as pd
+import pytest
+from sklearn.metrics import roc_auc_score
+
+import hazard_change as hc
+import likelihood_data as ld
+
+
+def _ratings(polygon, start, values):
+    """Daily ratings from `start`, with the same value in every band unless a tuple is given."""
+    rows = []
+    for i, value in enumerate(values):
+        atl, ntl, btl = value if isinstance(value, tuple) else (value,) * 3
+        rows.append({"date": pd.Timestamp(start) + pd.Timedelta(days=i), "polygon": polygon,
+                     "atl": atl, "ntl": ntl, "btl": btl})
+    return pd.DataFrame(rows)
+
+
+def _table(ratings, region="North", season=2023, **drivers):
+    """Modeling-table rows for every rated polygon-day, with all drivers at 0 unless given."""
+    table = ratings[["polygon", "date"]].assign(season=season, region=region, day_of_season=0,
+                                                Sn_capped=0, Ss_capped=0)
+    for column in ld.DRIVERS + ld.ACTIVITY_FEATURES:
+        table[column] = drivers.get(column, 0.0)
+    return table
+
+
+def test_change_table_uses_consecutive_days_only():
+    ratings = pd.concat([_ratings(1, "2024-01-01", [2, 3, 3]), _ratings(1, "2024-01-05", [1])])
+    ratings = ratings.astype({"atl": float}).reset_index(drop=True)
+    ratings.loc[1, "atl"] = np.nan  # not rated on Jan 2 above treeline
+
+    day = hc.build_change_table(_table(ratings), ratings).set_index("date")
+
+    assert day.loc["2024-01-02", "ntl_prev"] == 2
+    assert day.loc["2024-01-02", "ntl_change"] == 1
+    assert day.loc["2024-01-03", "ntl_trend"] == 1
+    assert day.loc["2024-01-03", "ntl_change"] == 0
+    # Jan 4 is missing, so Jan 5 has no rating for t-1
+    assert np.isnan(day.loc["2024-01-05", "ntl_prev"])
+    # An unrated day breaks the band's chain
+    assert np.isnan(day.loc["2024-01-03", "atl_prev"])
+
+
+def test_load_ratings_treats_zero_as_not_rated(tmp_path, monkeypatch):
+    path = tmp_path / "danger_rating.csv"
+    _ratings(1, "2024-01-01", [(0, 2, 1), (3, 2, 1)]).to_csv(path, index=False)
+    monkeypatch.setitem(hc.config.PATHS["RAW_DATA"], "danger_ratings", path)
+
+    ratings = hc.load_ratings()
+
+    assert ratings["atl"].isna().sum() == 1
+    assert ratings["ntl"].tolist() == [2, 2]
+
+
+def test_change_is_clipped_to_one_level():
+    table = hc.build_change_table(_table(_ratings(1, "2024-01-01", [1, 3, 1])), _ratings(1, "2024-01-01", [1, 3, 1]))
+
+    assert table["atl_change"].tolist()[1:] == [1, -1]
+
+
+def test_regional_drivers_are_means_over_the_region():
+    ratings = pd.concat([_ratings(1, "2024-01-01", [2]), _ratings(2, "2024-01-01", [2]), _ratings(3, "2024-01-01", [2])])
+    table = _table(ratings)
+    table["HN24"] = [0.1, 0.3, 0.9]
+    table["region"] = ["North", "North", "South"]
+
+    out = hc.build_change_table(table, ratings).set_index("polygon")
+
+    assert out.loc[1, "HN24_region"] == pytest.approx(0.2)
+    assert out.loc[3, "HN24_region"] == pytest.approx(0.9)
+
+
+def test_impossible_changes_are_masked():
+    proba = np.full((3, 3), 1 / 3)
+
+    masked = hc._mask_impossible(proba, np.array([1, 2, 4]))
+
+    assert masked[0, 0] == 0 and masked[2, 2] == 0
+    np.testing.assert_allclose(masked.sum(axis=1), 1)
+    np.testing.assert_allclose(masked[1], 1 / 3)
+
+
+def test_transition_model_frequencies():
+    train = pd.DataFrame({"atl_prev": [2] * 4 + [3], "atl_trend": [0] * 5, "atl_change": [1, 0, 0, 0, -1]})
+
+    model = hc.TransitionModel("atl", smoothing=0).fit(train)
+    proba = model.predict_proba(pd.DataFrame({"atl_prev": [2, 1], "atl_trend": [0, 1]}))
+
+    np.testing.assert_allclose(proba[0], [0, 0.75, 0.25])
+    # An unseen rating and trend falls back to the overall frequencies, then masks the decrease from Low
+    np.testing.assert_allclose(proba[1], np.array([0, 3, 1]) / 4)
+
+
+def _synthetic(seasons=(2023, 2024), polygons=range(1, 9), days=60, seed=0):
+    """Ratings that go up the day after heavy new snow, on otherwise random days."""
+    rng = np.random.default_rng(seed)
+    ratings, tables = [], []
+    for season in seasons:
+        for polygon in polygons:
+            snow = rng.random(days) < 0.2
+            values = [2] + [3 if s else 2 for s in snow[1:]]
+            r = _ratings(polygon, f"{season + 1}-01-01", values)
+            t = _table(r, season=season)
+            t["HN24"] = np.where(snow, 0.4, 0.0) + rng.normal(0, 0.05, days)
+            ratings.append(r)
+            tables.append(t)
+    return hc.build_change_table(pd.concat(tables), pd.concat(ratings))
+
+
+def test_change_model_learns_increase_from_new_snow():
+    df = hc.band_rows(_synthetic(), "atl")
+    train, test = df[df["season"] == 2023], df[df["season"] == 2024]
+
+    proba = hc.ChangeModel("atl", C=1.0).fit(train).predict_proba(test)
+
+    np.testing.assert_allclose(proba.sum(axis=1), 1)
+    assert roc_auc_score(test["atl_change"] == 1, proba[:, 2]) > 0.9
+
+
+def test_change_model_handles_a_change_missing_from_training():
+    df = hc.band_rows(_synthetic(), "atl")
+    train = df[df["atl_change"] >= 0]  # no decreases
+
+    proba = hc.ChangeModel("atl").fit(train).predict_proba(df)
+
+    assert proba.shape == (len(df), 3)
+    assert (proba[:, 0] == 0).all()
+
+
+def test_held_out_season_never_reaches_fit(monkeypatch):
+    fitted_on = []
+
+    class Recording:
+        def __init__(self, band):
+            pass
+
+        def fit(self, df):
+            fitted_on.append(set(df["season"]))
+            return self
+
+        def predict_proba(self, df):
+            return np.tile([0.1, 0.8, 0.1], (len(df), 1))
+
+    monkeypatch.setattr(hc, "MODELS", {"recording": Recording})
+    df = _synthetic(seasons=(2023, 2024, 2025))
+
+    predictions = hc.leave_one_season_out(df, "atl")
+
+    assert fitted_on == [{2024, 2025}, {2023, 2025}, {2023, 2024}]
+    assert len(predictions) == len(hc.band_rows(df, "atl"))
+
+
+def test_baseline_skill_is_zero_and_better_model_is_positive():
+    predictions = pd.concat([hc.leave_one_season_out(_synthetic(), band) for band in ["atl"]], ignore_index=True)
+
+    scores = hc.scores(predictions).set_index(["season", "model"])
+
+    assert (scores.xs("transition", level="model")["log_loss_skill"] == 0).all()
+    assert (scores.xs("change_logistic", level="model")["log_loss_skill"] > 0).all()
