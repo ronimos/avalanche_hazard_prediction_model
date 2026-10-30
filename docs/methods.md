@@ -78,7 +78,7 @@ The previous pipeline used the spy method for positive-unlabeled learning. Some 
 
 The occupancy-detection model is still positive-unlabeled learning, but it models the reporting rate instead of assuming it is constant ("selected at random" with a reporting submodel). Occurrence shares the driver effects across all polygons, so the data-rich polygons teach the physics. Reporting is estimated per polygon, pooled within its region, with season and weekend effects, so data-rich polygons don't impose their reporting rate on the others. Low-data polygons borrow driver effects from all polygons and their reporting level from their region, and their uncertainty shows: the 90%/10% quantile ratio of the record probability is 74 in polygons with no training events, against 3.2 in polygons with over 10.
 
-Neither approach escapes one limit. Without an outside anchor, the records can't tell many poorly reported avalanches from few well reported ones. The spy method hides this behind its constant c. This model makes it explicit as the detection prior (about 20% of D2+ avalanches reported), which is why the absolute occurrence probability rests on an assumption. Identifying polygons that are near-fully monitored would turn that prior into a measurement.
+Neither approach escapes one limit. Without an outside anchor, the records can't tell many poorly reported avalanches from few well reported ones. The spy method hides this behind its constant c. This model makes the assumption explicit: given the same snowpack, every polygon has the same avalanche frequency, so differences in record counts between polygons are read as differences in reporting (see What the probability means). Terrain and observer-access data, and knowing which polygons are near-fully monitored, would replace that assumption with measurements.
 
 ## Features
 
@@ -135,7 +135,7 @@ Snowpack drivers only move ψ and observer effort only moves d, which is what le
 - η\_s is a season-level reporting effort with a fixed N(0, 0.5) prior. Two training seasons can't estimate the spread of season effects (estimating it produced a funnel and divergent transitions). A new season draws from the same prior.
 - λ is the effect of weekends, federal holidays and December 24 to January 1. Visibility is not included: the only storm measures are snowfall and wind, which are occurrence drivers.
 
-**What the model can and cannot separate.** With one report stream per polygon-day and records this rare, logit(ψ·d) is close to logit ψ + logit d. A polygon effect on occurrence and one on detection can't be told apart, so the polygon baseline sits in detection only. Until access data separates them, differences in avalanche terrain between polygons are absorbed into δ\_p. The statewide detection level μ\_d has a prior with median 0.2 (normal on the logit scale, sd 0.75), which anchors the occurrence intercept. Rankings of days don't depend on that prior; absolute probabilities do. A better detection prior will come from polygons with near-complete monitoring, such as highway avalanche paths.
+**What the model can and cannot separate.** With one report stream per polygon-day and records this rare, logit(ψ·d) is close to logit ψ + logit d. A polygon effect on occurrence and one on detection can't be told apart, so the polygon baseline sits in detection only. Until access data separates them, differences in avalanche terrain between polygons are absorbed into δ\_p. The statewide detection level μ\_d has a prior with median 0.2 (normal on the logit scale, sd 0.75), but in the fitted model the busiest polygons anchor the occurrence level instead: detection can't exceed 1, and a polygon with records on 15% of days needs occurrence near 15%. Rankings of days within a polygon don't depend on this; absolute probabilities do.
 
 **Fitting.** The model (`src/bayes_model.py`) is fit with NUTS in PyMC using the NumPyro sampler: 4 chains, 1,000 tuning and 500 kept draws, target acceptance 0.95. Coefficients get normal priors with sd 1 on standardized drivers, and group standard deviations get half-normal priors. A fit passes with R-hat below 1.01, bulk effective sample size above 400 and no divergent transitions. One fold takes about 8 minutes on 62,000 polygon-days.
 
@@ -257,7 +257,7 @@ The Bayesian model can give each polygon-day a range as well as a probability (`
 
 The ratio of the 90% to the 10% quantile of the record probability has a median of 3.2 in polygons with over 10 training events, 8.6 with 1–10, and 74 with none. The model knows where it has no data.
 
-The absolute probability of occurrence rests on the detection prior (median 0.2). In polygons with no training events, mean occurrence is 0.088 against a record probability of 0.0013. The two can't be separated from these data, so occurrence probabilities are useful for ranking but should not be presented as calibrated.
+In polygons with no training events, mean occurrence is 0.088 against a record probability of 0.0013. The absolute occurrence level rests on the equal-frequency assumption described under What the probability means, so occurrence probabilities are useful for ranking but should not be presented as calibrated.
 
 Posterior predictive check (`src/uncertainty.py`): the record counts per polygon group and month, simulated from the held-out-season fits (all converged, R-hat at most 1.010, no divergences), compared with what was recorded:
 
@@ -334,11 +334,24 @@ On held-out seasons the drivers-only Bayesian model ranks days the same as the d
 
 - **Training.** `python likelihood_forecast.py --train` fits on every season in the modeling table, with 1,000 draws after 2,000 tuning steps per chain, and saves `artifacts/likelihood_model.joblib`. With the default 500 draws the all-season fit reached R-hat 1.017.
 - **Prediction.** `predict.py` calls `likelihood_forecast.predict` for the forecast day. Drivers come from the current season's SNOWPACK run. The forecast run ends partway through its last day, so a day is used only when the run continues past it. Building the drivers takes about 2 minutes.
-- **Output.** The CSV and JSON gain `dry_slab_probability` (posterior mean probability that a D2+ dry slab avalanche occurs, reported or not), `dry_slab_probability_q10` / `_q90` (its 80% interval) and `dry_slab_record_probability` (the probability that one occurs and is recorded, which can be checked against records). Occurrence is the quantity forecasters need; its level rests on the detection prior (median 0.2), so the absolute percentage is an assumption-based estimate and the interval includes the uncertainty about reporting. The current season is new to the model, so its reporting level is drawn from the prior as well. The event score and danger rating are unchanged, and the danger rating still uses the old event score. The map shows the occurrence probability by default (colors capped at 50%), with the 80% range in the tooltip and as two optional layers for its low and high ends. The old "Event Likelihood Score" layer is removed: it was colored by the danger rating's confidence, not by any avalanche probability.
+- **Output.** The CSV and JSON gain `dry_slab_probability` (posterior mean probability that a D2+ dry slab avalanche occurs, reported or not), `dry_slab_probability_q10` / `_q90` (its 80% interval) and `dry_slab_record_probability` (the probability that one occurs and is recorded, which can be checked against records). Occurrence is the quantity forecasters need; what its level means is set out below. The current season is new to the model, so its reporting level is drawn from the prior as well. The event score and danger rating are unchanged, and the danger rating still uses the old event score. The map shows the occurrence probability by default (colors capped at 50%), with the 80% range in the tooltip and as two optional layers for its low and high ends. The old "Event Likelihood Score" layer is removed: it was colored by the danger rating's confidence, not by any avalanche probability.
 - **Outside November to May** the model extrapolates and the run logs a warning.
 - **If it fails**, the hazard outputs are still written without the new fields.
 
-## Status and open questions
+### What the probability means
+
+The forecast is the probability of at least one D2+ dry slab avalanche in the polygon that day, natural or triggered, **at the activity and observation level of the most closely watched polygons**. That qualifier comes from how the model splits records into occurrence and reporting.
+
+The occurrence side has no term for the polygon itself: given the same snowpack, every polygon is assumed to produce avalanches at the same rate. Any difference in record counts between polygons is therefore read as a difference in reporting. In the fitted model the estimated reporting rate tracks a polygon's record days almost exactly (rank correlation 0.95) and falls with polygon size (−0.36). It ranges from 0.1% to 40% between the 10th and 90th percentiles of polygons, with a median of 2%. The busiest polygons sit near 100%: polygon 132 (Northern San Juan) has a recorded D2+ dry slab on 93 of 637 winter days and an estimated reporting rate of 96% (80% interval 90–99%). Because reporting can't exceed 100%, these polygons set the occurrence level for all others.
+
+The equal-rate assumption is reasonable for natural avalanches, which depend on conditions and terrain. It is weaker for triggered ones, which also depend on skier, rider and snowmobile traffic and on explosive control work, both higher where reporting is higher. About 70% of D2+ dry slab records are natural, and the share is similar in the 15 busiest polygons (70%) and the rest (67%); people trigger 13% and 18%, explosives 14% and 11%. So the busiest polygons have more records of every kind, which points mainly to better observation or more avalanche terrain, but the triggered share still mixes traffic into the occurrence level.
+
+In practice:
+
+- **Ranking days within a polygon** doesn't depend on any of this, and it is what the held-out evaluation measures.
+- **Comparing polygons and reading absolute percentages** does. A quiet polygon's probability is what the busiest polygons would record under the same snowpack, including their traffic. Its own number of avalanches may be lower, for example where there is less avalanche terrain or fewer people to trigger slopes.
+- The 80% interval covers the model's statistical uncertainty, not this assumption.
+
 
 Work happens on the `dev` branch. The production forecast keeps running the current models until the new one beats both baselines on held-out seasons.
 
@@ -355,6 +368,8 @@ Work happens on the `dev` branch. The production forecast keeps running the curr
 Open questions:
 
 - **Observer access by polygon.** Highway paths, ski-area boundaries and trailhead locations would give the detection model its strongest covariates. Is there a layer for these?
-- **Detection prior.** Which polygons can be treated as near-fully monitored?
+- **Detection prior.** Which polygons can be treated as near-fully monitored? Is polygon 132's estimated 96% reporting plausible (a highway corridor such as Red Mountain Pass)?
+- **Avalanche terrain by polygon.** The area of avalanche-prone slopes (about 30–45°) from a DEM, as an occurrence covariate. With it the model can attribute part of the difference between polygons to terrain instead of reporting. Which DEM should it use?
+- **Traffic and triggered avalanches.** Human-triggered avalanches depend on traffic, which also raises reporting. Options: a natural-only label, whose equal-rate assumption holds best; or a traffic measure (trailhead counts, ski-area and highway control work) on both sides of the model.
 - **Committing the export.** The CSV includes free-text comments and descriptions. Should it go into the public GitHub repo, or stay on the server only?
 - **Thin 2025-26 snowpack.** Median November to May modeled snow depth was 0.27 m, against 0.59 m in 2023-24 and 0.48 m in 2024-25. This is real: 2025-26 was the worst season in about 50 years across much of Colorado. Results for that season should carry less weight.

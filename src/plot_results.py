@@ -26,6 +26,9 @@ import config
 # Occurrence probabilities above this get the top color (about the 95th percentile of winter polygon-days)
 DRY_SLAB_COLOR_MAX = 0.5
 
+# What the dry slab probability means and its limits
+METHODS_DOC_URL = "https://github.com/ronimos/avalanche_hazard_prediction_model/blob/main/docs/methods.md#what-the-probability-means"
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -140,7 +143,7 @@ def create_prediction_map(prediction_date: Union[str, datetime]):
         dry_slab_colormap = cm.LinearColormap(
             colors=['#3b82f6', '#facc15', '#ef4444', '#000000'],
             vmin=0, vmax=DRY_SLAB_COLOR_MAX,
-            caption=f'Probability of a D2+ Dry Slab Avalanche (reported or not; capped at {DRY_SLAB_COLOR_MAX:.0%})'
+            caption=f'Probability of a D2+ Dry Slab Avalanche, Natural or Triggered (reported or not; capped at {DRY_SLAB_COLOR_MAX:.0%})'
         )
         m.add_child(dry_slab_colormap)
 
@@ -239,6 +242,13 @@ def create_prediction_map(prediction_date: Union[str, datetime]):
     ).add_to(hazard_confidence_layer)
     hazard_confidence_layer.add_to(m)
 
+
+    # --- Link to the methods doc ---
+    m.get_root().html.add_child(folium.Element(
+        '<div style="position: fixed; bottom: 24px; left: 12px; z-index: 1000; background: white; padding: 6px 10px; '
+        'border-radius: 4px; font: 13px sans-serif; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);">'
+        f'<a href="{METHODS_DOC_URL}" target="_blank" rel="noopener">How to read the dry slab probability (methods)</a></div>'
+    ))
 
     # --- Add Layer Control ---
     folium.LayerControl().add_to(m)

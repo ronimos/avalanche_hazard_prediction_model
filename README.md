@@ -2,10 +2,10 @@
 ## 1. Overview
 This project forecasts daily avalanche conditions for the 147 Colorado backcountry forecast polygons from simulated snowpack data (SNOWPACK driven by numerical weather predictions), so it doesn't depend on local field observations. Each daily run produces, for every polygon:
 
-- **Dry slab likelihood:** the probability that a D2 or larger dry slab avalanche occurs, whether or not it is reported, with an 80% interval. This comes from the new likelihood model (section 3).
+- **Dry slab likelihood:** the probability of a D2 or larger dry slab avalanche, natural or triggered, whether or not it is reported, with an 80% interval. This comes from the new likelihood model (section 3).
 - **Danger rating:** a predicted rating (Low to High) with a confidence score, from the original two-stage pipeline (section 4).
 
-The core difficulty is incomplete data (a positive-unlabeled problem). A recorded avalanche confirms that one happened, but no record doesn't mean none occurred. The likelihood model handles this by modeling occurrence and reporting separately, and reports the probability of occurrence. Its level rests on an assumed reporting rate (a prior of about 20% of D2+ avalanches reported), which the records alone can't pin down; the 80% interval includes that uncertainty.
+The core difficulty is incomplete data (a positive-unlabeled problem). A recorded avalanche confirms that one happened, but no record doesn't mean none occurred. The likelihood model handles this by modeling occurrence and reporting separately, and reports the probability of occurrence. The model assumes that, given the same snowpack, every polygon produces avalanches at the same rate, so the busiest polygons (treated as near-fully reported) set the level for all of them. Rankings of days within a polygon don't depend on this; absolute percentages and comparisons between polygons do. See "What the probability means" in the methods doc.
 
 The output is a CSV, a JSON file and an interactive map for the forecasters.
 
@@ -69,7 +69,7 @@ Output fields:
 
 | Field | Meaning |
 | --- | --- |
-| `dry_slab_probability` | Probability that a D2+ dry slab avalanche occurs in the polygon, reported or not |
+| `dry_slab_probability` | Probability of a D2+ dry slab avalanche in the polygon, natural or triggered, reported or not, at the activity level of the most closely watched polygons |
 | `dry_slab_probability_q10`, `dry_slab_probability_q90` | 80% interval of that probability |
 | `dry_slab_record_probability` | Probability that one occurs and is recorded; the part that can be checked against records |
 | `predicted_hazard`, `confidence` | Danger rating (1 to 4) and its calibrated probability |

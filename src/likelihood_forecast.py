@@ -13,12 +13,12 @@ days it added little on held-out seasons. The model is refit once before each
 season on all past seasons; mid-season retraining didn't help.
 
 For each polygon it gives the probability that a D2+ dry slab avalanche
-occurs, whether or not anyone reports it (posterior mean, with the 10% and 90%
-posterior quantiles). Its level rests on the detection prior (about 20% of
-avalanches reported): the records alone can't tell many poorly reported
-avalanches from few well reported ones, so the interval includes that
-uncertainty. The probability that one is recorded is also given, since it is
-the part that can be checked against the records.
+occurs, natural or triggered, whether or not anyone reports it (posterior mean,
+with the 10% and 90% posterior quantiles). The model assumes every polygon has
+the same avalanche rate given the snowpack, so the busiest polygons, treated as
+near-fully reported, set the level for all of them; the interval doesn't cover
+that assumption (see docs/methods.md). The probability that one is recorded is
+also given, since it is the part that can be checked against the records.
 
 Drivers for the forecast day come from the current season's SNOWPACK run
 (SNOWPACK_DATA_ROOT). The run ends partway through its last day, so a day is
