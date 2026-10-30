@@ -75,7 +75,7 @@ td.num, th.num { text-align: right; }
       <p class="meta">Forecast for __DATE_LONG__ · generated __GENERATED__ · __N__ polygons</p>
     </div>
     <div class="switch" role="group" aria-label="Map shows">
-      <button id="v-p" data-view="p" aria-pressed="true">Most likely</button>
+      <button id="v-p" data-view="p" aria-pressed="true">Best estimate</button>
       <button id="v-lo" data-view="lo" aria-pressed="false">Low end</button>
       <button id="v-hi" data-view="hi" aria-pressed="false">High end</button>
     </div>
@@ -88,7 +88,14 @@ td.num, th.num { text-align: right; }
     </div>
     <div class="detail">
       <div class="card" id="detail" aria-live="polite"></div>
-      <p class="hint">Hover or tap a polygon. "Low end" and "High end" color the map by the 10% and 90% quantiles, the edges of the 80% range. Switch between the street map and satellite imagery with the layer button on the map.</p>
+      <p class="hint">Hover or tap a polygon to see its numbers. Switch between the street map and satellite imagery with the layer button on the map.</p>
+      <div class="card notes">
+        <h2>Best estimate, low end, high end</h2>
+        <p>The model can't pin down a polygon's probability exactly, so it gives a <b>best estimate</b> and a range. The <b>80% range</b> runs from the <b>low end</b> to the <b>high end</b>: the model puts an 80% chance on the true probability being inside it, 10% on it being lower than the low end and 10% on it being higher than the high end.</p>
+        <p>Example: "8%, 80% range 4% to 12%" means the best estimate is 8%, and the model would be surprised, but not shocked, if the true value were as low as 4% or as high as 12%.</p>
+        <p>The buttons recolor the map. <b>Low end</b> shows each polygon at the bottom of its range, the most optimistic value the model finds plausible. <b>High end</b> shows the top of the range, the most pessimistic plausible value, for a cautious reading. Each polygon is shown at its own end; the high-end map is not one scenario in which every polygon is at its worst at once.</p>
+        <p>The range is the model's uncertainty about the right probability. It is not a range of weather outcomes or avalanche sizes, and it doesn't cover the equal-rate assumption described below.</p>
+      </div>
     </div>
   </div>
 
