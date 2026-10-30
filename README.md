@@ -15,6 +15,7 @@ The likelihood model is being rebuilt on the `dev` branch; the methods, results 
 - The original event model (positive-unlabeled `RandomForestClassifier`) showed no skill on held-out seasons: AUC 0.48 and 0.55, against 0.90 on a random split. It is replaced by the dry slab likelihood model in the output.
 - The danger rating model still uses the original event score as an input. Rebuilding it is deferred.
 - Wet avalanches are outside the scope of the likelihood model.
+- Read the forecast with its limitations, listed in [Limitations of the forecast](docs/methods.md#limitations-of-the-forecast). The largest is that exposure (backcountry traffic, control work) isn't measured, so the forecast mixes snowpack conditions with the exposure and observation of the best-watched polygons.
 
 ## 3. Dry Slab Likelihood Model
 A Bayesian hierarchical occupancy-detection model (`bayes_model.py`, PyMC with the NumPyro sampler):

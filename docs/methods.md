@@ -342,7 +342,7 @@ On held-out seasons the drivers-only Bayesian model ranks days the same as the d
 
 The forecast is the probability of at least one D2+ dry slab avalanche in the polygon that day, natural or triggered, **at the activity and observation level of the most closely watched polygons**. That qualifier comes from how the model splits records into occurrence and reporting.
 
-The occurrence side has no term for the polygon itself: given the same snowpack, every polygon is assumed to produce avalanches at the same rate. Any difference in record counts between polygons is therefore read as a difference in reporting. In the fitted model the estimated reporting rate tracks a polygon's record days almost exactly (rank correlation 0.95) and falls with polygon size (−0.36). It ranges from 0.1% to 40% between the 10th and 90th percentiles of polygons, with a median of 2%. The busiest polygons sit near 100%: polygon 132 (Northern San Juan) has a recorded D2+ dry slab on 93 of 637 winter days and an estimated reporting rate of 96% (80% interval 90–99%). Because reporting can't exceed 100%, these polygons set the occurrence level for all others.
+The occurrence side has no term for the polygon itself: given the same snowpack, every polygon is assumed to produce avalanches at the same rate. Any difference in record counts between polygons is therefore read as a difference in reporting. In the fitted model the estimated reporting rate tracks a polygon's record days almost exactly (rank correlation 0.95) and falls with polygon size (−0.36). It ranges from 0.1% to 40% between the 10th and 90th percentiles of polygons, with a median of 2%. The busiest polygons sit near 100%: polygon 132 (Northern San Juan) has a recorded D2+ dry slab on 93 of 637 winter days and an estimated reporting rate of 96% (80% interval 90–99%). It covers the Red Mountain Pass highway corridor, so near-complete reporting is plausible. Because reporting can't exceed 100%, these polygons set the occurrence level for all others.
 
 The equal-rate assumption is reasonable for natural avalanches, which depend on conditions and terrain. It is weaker for triggered ones, which also depend on skier, rider and snowmobile traffic and on explosive control work, both higher where reporting is higher. About 70% of D2+ dry slab records are natural, and the share is similar in the 15 busiest polygons (70%) and the rest (67%); people trigger 13% and 18%, explosives 14% and 11%. So the busiest polygons have more records of every kind, which points mainly to better observation or more avalanche terrain, but the triggered share still mixes traffic into the occurrence level.
 
@@ -351,6 +351,18 @@ In practice:
 - **Ranking days within a polygon** doesn't depend on any of this, and it is what the held-out evaluation measures.
 - **Comparing polygons and reading absolute percentages** does. A quiet polygon's probability is what the busiest polygons would record under the same snowpack, including their traffic. Its own number of avalanches may be lower, for example where there is less avalanche terrain or fewer people to trigger slopes.
 - The 80% interval covers the model's statistical uncertainty, not this assumption.
+
+### Limitations of the forecast
+
+What the forecast can and can't say, in order of how much each limits its use:
+
+1. **Exposure isn't measured.** Triggered avalanches depend on how many people travel in avalanche terrain, and on explosive control work. There are no trailhead counts or other exposure data for Colorado's backcountry, a gap across backcountry avalanche hazard research. The forecast therefore mixes snowpack conditions with the exposure and observation of the best-watched polygons, such as the Red Mountain Pass corridor.
+2. **Comparisons between polygons are weaker than comparisons between days.** Polygons differ in how much avalanche terrain they hold, and the model reads those differences as differences in reporting. A terrain covariate from a DEM is deferred.
+3. **The absolute level isn't validated.** Occurrence is never observed, so only the record probability can be checked against records. The held-out evaluation validates ranking, not the percentage.
+4. **The 80% interval is statistical only.** It covers uncertainty in the coefficients, the polygon's reporting level and a new season's reporting level, not the assumptions above. A season far outside the training data, like 2025-26, can fall outside it.
+5. **Scope.** D2 and larger dry slab avalanches only. Wet avalanches, loose avalanches and D1 slabs aren't forecast, and records with no type are left out, so the label slightly undercounts.
+6. **Inputs.** Snowpack drivers come from one SNOWPACK station per polygon, the one nearest the polygon's center, run with forecast weather. Recent avalanche activity isn't used because there is no confirmed live feed of records. About 70% of record dates are estimated.
+7. **Season window.** The model is trained on November to May. Earlier or later days are extrapolated.
 
 
 Work happens on the `dev` branch. The production forecast keeps running the current models until the new one beats both baselines on held-out seasons.
@@ -368,8 +380,7 @@ Work happens on the `dev` branch. The production forecast keeps running the curr
 Open questions:
 
 - **Observer access by polygon.** Highway paths, ski-area boundaries and trailhead locations would give the detection model its strongest covariates. Is there a layer for these?
-- **Detection prior.** Which polygons can be treated as near-fully monitored? Is polygon 132's estimated 96% reporting plausible (a highway corridor such as Red Mountain Pass)?
-- **Avalanche terrain by polygon.** The area of avalanche-prone slopes (about 30–45°) from a DEM, as an occurrence covariate. With it the model can attribute part of the difference between polygons to terrain instead of reporting. Which DEM should it use?
-- **Traffic and triggered avalanches.** Human-triggered avalanches depend on traffic, which also raises reporting. Options: a natural-only label, whose equal-rate assumption holds best; or a traffic measure (trailhead counts, ski-area and highway control work) on both sides of the model.
+- **Detection prior.** Which other polygons can be treated as near-fully monitored, like polygon 132 on the Red Mountain Pass corridor?
+- **Avalanche terrain by polygon.** Deferred: the area of avalanche-prone slopes (about 30–45°) from a DEM, as an occurrence covariate, would let the model attribute part of the difference between polygons to terrain instead of reporting.
 - **Committing the export.** The CSV includes free-text comments and descriptions. Should it go into the public GitHub repo, or stay on the server only?
 - **Thin 2025-26 snowpack.** Median November to May modeled snow depth was 0.27 m, against 0.59 m in 2023-24 and 0.48 m in 2024-25. This is real: 2025-26 was the worst season in about 50 years across much of Colorado. Results for that season should carry less weight.
