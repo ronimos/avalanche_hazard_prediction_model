@@ -4,7 +4,9 @@ Oct 28, 2026 · Ron Simenhois
 
 ## Objective
 
-We estimate, for each of the 147 backcountry forecast polygons and each day, the probability that at least one avalanche occurs. The model treats avalanche reports as incomplete: a report confirms an avalanche, but no report does not rule one out.
+We estimate, for each of the 147 backcountry forecast polygons and each day, the probability that at least one D2 or larger dry slab avalanche occurs. The model treats avalanche reports as incomplete: a report confirms an avalanche, but no report does not rule one out.
+
+**Scope: dry slab avalanches only.** Wet slab and wet loose avalanches have different drivers (melt, rain, the loss of strength as liquid water enters the snowpack) and a different daily timing. They are outside the scope of this model and need a separate one. Loose dry avalanches, cornice falls and glide avalanches are also excluded.
 
 This replaces the event model in the current pipeline, a positive-unlabeled RandomForest. Its reported test AUC of 0.90 came from a random split of polygon-days. Holding out a whole season, its AUC fell to 0.48 and 0.55, below a day-of-season plus polygon baseline (0.68 and 0.58). It was also trained on only 7 polygons and applied to all 147.
 
@@ -46,13 +48,15 @@ Records are very uneven across polygons. The median polygon has 32 avalanches ov
 
 ## Labels and the positive-unlabeled problem
 
-The unit of analysis is a polygon-day: 147 polygons over November to May of each season. A polygon-day is labeled 1 when at least one D2 or larger avalanche is recorded in the polygon on that day, and 0 otherwise.
+The unit of analysis is a polygon-day: 147 polygons over November to May of each season. A polygon-day is labeled 1 when at least one D2 or larger dry slab avalanche (type `SS` soft slab or `HS` hard slab) is recorded in the polygon on that day, and 0 otherwise.
 
-| Season | D2+ polygon-days | Natural-trigger polygon-days | Any-avalanche polygon-days |
-| --- | --- | --- | --- |
-| 2023-24 | 814 | 1,083 | 1,728 |
-| 2024-25 | 714 | 1,029 | 1,611 |
-| 2025-26 | 404 | 709 | 1,085 |
+| Season | D2+ dry slab polygon-days | D2+ polygon-days (any type) | Natural-trigger polygon-days | Any-avalanche polygon-days |
+| --- | --- | --- | --- | --- |
+| 2023-24 | 688 | 814 | 1,083 | 1,728 |
+| 2024-25 | 525 | 714 | 1,029 | 1,611 |
+| 2025-26 | 292 | 404 | 709 | 1,085 |
+
+Of the 1,915 D2+ polygon-days, 1,505 include a dry slab. Wet avalanches account for most of the rest in spring: in May, 65 D2+ wet avalanche records against 17 dry slab ones. 196 polygon-days have only records with no type (`-` or `U`). They are left out because they can't be confirmed as dry slabs. Most fall in December to February, so most are probably dry slabs, and the label slightly undercounts.
 
 A 0 means no avalanche was reported, not that none occurred. An avalanche enters the record only if it happens and someone sees and reports it. Reporting depends on where observers travel, the weather, weekends, and how much effort the forecast center puts into field work in a given season. The model therefore separates two probabilities: that an avalanche occurred, and that it was reported given that it occurred (see Model).
 
@@ -61,7 +65,7 @@ Label choices that differ from the previous pipeline:
 - **Occurrence date, not report date.** The previous pipeline used the report timestamp. The export's `Date` is the estimated or known occurrence date.
 - **No forward smearing.** The previous label marked a day positive if an event fell anywhere from the day before to two days after. That leaks future observations into today's label and multiplied positives about 2.4 times.
 - **Date uncertainty is kept explicit.** 70% of dates are estimated. A sensitivity run will let an estimated-date avalanche count on its date or the day before.
-- **D2+ as the main label.** D2+ avalanches can bury, injure or kill a person, and their larger debris is easier to see from a distance than D1. Natural-trigger and any-size labels are kept as alternatives.
+- **D2+ dry slabs as the main label.** D2+ avalanches can bury, injure or kill a person, and their larger debris is easier to see from a distance than D1. Restricting to dry slabs matches the label to the drivers. The D2+ (any type), natural-trigger and any-size labels are kept as alternatives (`--label`).
 
 ## Features
 
@@ -144,6 +148,8 @@ The model has to beat two baselines on held-out seasons:
 The harness is `src/evaluation.py`; any model with `fit(table)` and `predict(table)` can be scored.
 
 ### Baseline results
+
+This section, the next four and the retraining backtest use the D2+ label of any type, from before the scope moved to dry slabs. Dry slab results are under Dry slab label.
 
 Held-out season results for the D2+ label (`results/evaluation/season_metrics_d2plus.csv`):
 
@@ -252,6 +258,33 @@ Posterior predictive check (`src/uncertainty.py`): the record counts per polygon
 | 2025-26 | Over 10 | 29% | 29% |
 
 In ordinary seasons the intervals are somewhat conservative. 2025-26, the worst season in about 50 years across much of Colorado, falls below the predicted range in November, December, January, April and May. The season's reporting effect allows for ordinary differences between seasons, not a season this far outside the training data. In May, polygons with over 10 training events had more D2+ records than predicted in both other seasons (22 to 28 against medians of 11 to 18), which suggests the spring wet-snow drivers are missing something.
+
+### Dry slab label
+
+The results above use the D2+ label of any type. The model is now scoped to D2+ dry slabs (see Labels), so the evaluation and the uncertainty runs were repeated with that label at lag 2 (`results/evaluation/lag2/*_dry_slab.csv`, `results/uncertainty/`). The D2+ outputs are kept in `*_d2plus.csv` and `results/uncertainty_d2plus/`.
+
+| Held-out season | Recorded polygon-days | Climatology within-polygon AUC | Drivers | Drivers and activity | Bayesian with activity | Average precision, drivers and activity |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2023-24 | 688 (2.2%) | 0.74 | 0.82 | 0.82 | 0.82 | 0.29 |
+| 2024-25 | 525 (1.7%) | 0.73 | 0.82 | 0.83 | 0.83 | 0.28 |
+| 2025-26 | 292 (0.9%) | 0.84 | 0.89 | 0.89 | 0.89 | 0.34 |
+
+- **The drivers rank days better for dry slabs.** Within-polygon AUC with drivers rises from 0.79 / 0.77 / 0.83 (D2+) to 0.82 / 0.82 / 0.89, and the gain over climatology grows from 0.03 to 0.07 to 0.05 to 0.09. A dry slab label matches what the snowpack drivers describe.
+- **Recent activity adds little at lag 2.** Within-polygon AUC gains are +0.003, +0.007 and +0.005, all intervals include 0. Average precision gains are +0.016 (0.003 to 0.027), +0.002 and +0.015. Regional dry slab activity keeps a consistent effect in the Bayesian model (+0.32 to +0.35), and the polygon's own record adds +0.11 to +0.19.
+- **The Bayesian model again matches the logistic regression.** Paired within-polygon AUC differences are 0.000, +0.001 and 0.000, and all intervals include 0. Fits: R-hat 1.008, 1.010 and 1.010 (the last just over the bar), no divergent transitions. The storm-day effect still has sd 1.34 to 1.52.
+- **Air temperature matters more.** Daily maximum air temperature has an effect of −0.69 to −1.00, against −0.16 to −0.46 for D2+: warm days were adding wet avalanches to the D2+ label. Lowest natural stability (−0.38 to −0.80), 3-day SWE gain, modeled snow depth and 24 h warming are consistent across folds. New snow over 72 h is weaker than for D2+ (−0.02 to +0.37).
+
+Predicted / recorded events by polygon group, seasons 2023-24 / 2024-25 / 2025-26:
+
+| Polygon group | Logistic with activity | Bayesian with activity |
+| --- | --- | --- |
+| No training events | 2.6 / 2.3 / 4.3 | 1.5 / 1.2 / 2.3 |
+| 1–10 training events | 0.8 / 1.1 / 1.3 | 1.0 / 1.5 / 2.2 |
+| Over 10 training events | 0.9 / 1.1 / 1.1 | 1.0 / 1.2 / 1.4 |
+
+As with D2+, the Bayesian model over-predicts about half as much in polygons with no training events. With 19, 14 and 4 events in that group, the AUC differences there are too noisy to report.
+
+Posterior predictive check, dry slab label (months inside the 80% interval, all polygon groups): 95% in 2023-24, 100% in 2024-25 and 57% in 2025-26, where all misses are below the interval. **The May under-prediction is gone.** With D2+, polygons with over 10 training events had more May records than the 80% interval allowed in 2024-25. With dry slabs, the only month above its interval is December 2023 in the same group (65 records against 31 to 62). That supports the earlier reading that the missing May records were wet avalanches. 2024-25 is now somewhat over-predicted (1.2 to 1.4× in groups with training events), against 1.0 for D2+.
 
 ### Mid-season retraining
 

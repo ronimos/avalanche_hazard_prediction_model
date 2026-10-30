@@ -97,7 +97,7 @@ def main() -> None:
     if args.summarize:
         summarize()
         return
-    table = ld.load_modeling_table("d2plus")
+    table = ld.load_modeling_table(ld.DEFAULT_LABEL)
     for season in args.seasons or sorted(table["season"].unique()):
         run_season(table, season)
 

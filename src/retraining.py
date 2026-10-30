@@ -165,7 +165,7 @@ def summarize(label: str, n_boot: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Backtest of mid-season retraining.")
-    parser.add_argument("--label", choices=sorted(ld.LABELS), default="d2plus")
+    parser.add_argument("--label", choices=sorted(ld.LABELS), default=ld.DEFAULT_LABEL)
     parser.add_argument("--variants", nargs="+", default=["static", "refit", "weighted", "recalibrate"])
     parser.add_argument("--schedule", choices=sorted(SCHEDULES), default="weekly")
     parser.add_argument("--seasons", nargs="+", type=int, help="Seasons to replay (default: all).")

@@ -24,7 +24,7 @@ Skill is also reported by polygon group (how many events each polygon had in
 the training seasons), to show whether quiet polygons get useful predictions.
 
 Usage:
-    python evaluation.py --label d2plus
+    python evaluation.py --label dry_slab
 
 Author: Ron Simenhois
 """
@@ -259,7 +259,7 @@ def block_bootstrap(predictions: Dict[str, pd.DataFrame], reference: str, block_
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Leave-one-season-out evaluation of avalanche likelihood models.")
-    parser.add_argument("--label", choices=sorted(ld.LABELS), default="d2plus")
+    parser.add_argument("--label", choices=sorted(ld.LABELS), default=ld.DEFAULT_LABEL)
     parser.add_argument("--models", nargs="+", default=list(BASELINES), help="Models to score; 'bayes' adds the occupancy-detection model.")
     parser.add_argument("--n-boot", type=int, default=500)
     parser.add_argument("--reference", default="climatology", help="Model that bootstrap differences are taken against.")

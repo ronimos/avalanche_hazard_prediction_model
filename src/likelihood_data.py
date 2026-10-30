@@ -9,7 +9,8 @@ avalanche activity (`avalanche_observations.py`) into one modeling table: a
 row per forecast polygon and local date, November to May.
 
 A label of 1 means at least one qualifying avalanche was recorded that day. A
-label of 0 means none was recorded, not that none occurred.
+label of 0 means none was recorded, not that none occurred. The main label is
+D2+ dry slab avalanches; wet avalanches are outside the model's scope.
 
 Recent recorded activity is also added as a forecastable feature. Avalanche
 cycles last several days and cover whole regions, so what was recorded in the
@@ -40,15 +41,17 @@ STABILITY_CAP = 6.0
 
 # Label name -> activity column whose count must be positive
 LABELS = {
+    "dry_slab": "dry_slab_d2plus_avalanches",
     "d2plus": "d2plus_avalanches",
     "natural": "natural_avalanches",
     "any": "n_avalanches",
 }
+DEFAULT_LABEL = "dry_slab"
 
 SEASON_MONTHS = (11, 12, 1, 2, 3, 4, 5)
 
 # Recorded activity before the forecast day: own polygon, and the polygon's forecast region
-ACTIVITY_FEATURES = ["polygon_recent_any", "region_recent_d2plus", "region_recent_any"]
+ACTIVITY_FEATURES = ["polygon_recent_any", "region_recent_dry_slab", "region_recent_any"]
 
 # Activity window: `ACTIVITY_WINDOW` days ending `lag` days before the forecast day
 ACTIVITY_WINDOW = 2
@@ -87,19 +90,19 @@ def recent_activity(activity: pd.DataFrame, regions: pd.Series, lag: int = DEFAU
 
     Returns:
         tuple: (per polygon-date frame with 'polygon_recent_any',
-                per region-date frame with 'region_recent_d2plus' and 'region_recent_any').
+                per region-date frame with 'region_recent_dry_slab' and 'region_recent_any').
     """
     activity = activity.assign(date=pd.to_datetime(activity["date"]), region=activity["polygon"].map(regions),
                                any_record=1)
     by_polygon = _trailing_sum(activity, "polygon", ["any_record"], lag, window)
     by_polygon["polygon_recent_any"] = (by_polygon.pop("any_record") > 0).astype(int)
-    by_region = _trailing_sum(activity, "region", ["d2plus_avalanches", "n_avalanches"], lag, window)
-    by_region["region_recent_d2plus"] = np.log1p(by_region.pop("d2plus_avalanches"))
+    by_region = _trailing_sum(activity, "region", ["dry_slab_d2plus_avalanches", "n_avalanches"], lag, window)
+    by_region["region_recent_dry_slab"] = np.log1p(by_region.pop("dry_slab_d2plus_avalanches"))
     by_region["region_recent_any"] = np.log1p(by_region.pop("n_avalanches"))
     return by_polygon, by_region
 
 
-def build_modeling_table(drivers: pd.DataFrame, activity: pd.DataFrame, label: str = "d2plus",
+def build_modeling_table(drivers: pd.DataFrame, activity: pd.DataFrame, label: str = DEFAULT_LABEL,
                          months: Iterable[int] = SEASON_MONTHS, regions: Optional[pd.Series] = None,
                          activity_lag: int = DEFAULT_ACTIVITY_LAG) -> pd.DataFrame:
     """
@@ -138,7 +141,7 @@ def build_modeling_table(drivers: pd.DataFrame, activity: pd.DataFrame, label: s
     return table.sort_values(["season", "polygon", "date"]).reset_index(drop=True)
 
 
-def load_modeling_table(label: str = "d2plus", activity_lag: int = DEFAULT_ACTIVITY_LAG) -> pd.DataFrame:
+def load_modeling_table(label: str = DEFAULT_LABEL, activity_lag: int = DEFAULT_ACTIVITY_LAG) -> pd.DataFrame:
     """Builds the modeling table, with recent-activity features, from the processed driver and activity files."""
     drivers = pd.read_csv(config.PATHS["PROCESSED_DATA"]["snowpack_drivers"], dtype={"station": str})
     activity = pd.read_csv(config.PATHS["PROCESSED_DATA"]["daily_polygon_activity"])

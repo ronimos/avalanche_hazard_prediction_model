@@ -30,6 +30,9 @@ import config
 
 LOCAL_TZ = "America/Denver"
 
+# Soft and hard slabs. Wet, loose, cornice and untyped records are outside the likelihood model's scope.
+DRY_SLAB_TYPES = ("SS", "HS")
+
 # CAIC export column -> pipeline column
 COLUMN_MAP = {
     "Observation ID": "obs_id",
@@ -140,17 +143,21 @@ def summarize_daily_activity(assigned: pd.DataFrame) -> pd.DataFrame:
 
     Returns:
         pd.DataFrame: Per polygon-day counts of records and avalanches, natural
-                      avalanches, D2+ avalanches, and the largest size.
+                      avalanches, D2+ avalanches, D2+ dry slabs, and the largest size.
     """
+    d2plus = assigned["destructive_size"] >= 2
     df = assigned.assign(
         natural_avalanches=assigned["n_avalanches"].where(assigned["natural"], 0),
-        d2plus_avalanches=assigned["n_avalanches"].where(assigned["destructive_size"] >= 2, 0),
+        d2plus_avalanches=assigned["n_avalanches"].where(d2plus, 0),
+        dry_slab_d2plus_avalanches=assigned["n_avalanches"].where(
+            d2plus & assigned["avalanche_type"].isin(DRY_SLAB_TYPES), 0),
     )
     return df.groupby(["polygon", "date"], as_index=False).agg(
         n_records=("obs_id", "size"),
         n_avalanches=("n_avalanches", "sum"),
         natural_avalanches=("natural_avalanches", "sum"),
         d2plus_avalanches=("d2plus_avalanches", "sum"),
+        dry_slab_d2plus_avalanches=("dry_slab_d2plus_avalanches", "sum"),
         max_destructive_size=("destructive_size", "max"),
         any_date_known=("date_known", "any"),
     )
