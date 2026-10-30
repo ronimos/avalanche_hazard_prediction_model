@@ -124,6 +124,7 @@ PATHS = {
         "hazard_model": ARTIFACTS_DIR / "hazard_model.joblib",
         "hazard_scaler": ARTIFACTS_DIR / "hazard_scaler.joblib",
         "hazard_calibrators": ARTIFACTS_DIR / "hazard_calibrators.joblib",
+        "likelihood_model": ARTIFACTS_DIR / "likelihood_model.joblib",
         
         # --- Feature Lists & Params ---
         "event_final_features": ARTIFACTS_DIR / "event_final_features.json",

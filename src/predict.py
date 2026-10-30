@@ -23,7 +23,10 @@ Workflow:
        to correct for calibration issues.
     c. The calibrated probabilities are re-normalized to sum to 1.
     d. The final hazard level and its associated confidence are determined.
-6.  **Save Results**: Saves the final predictions, including the confidence
+6.  **Predict Dry Slab Likelihood**: Adds the probability of a recorded D2+
+    dry slab avalanche and its 80% interval from the likelihood model
+    (`likelihood_forecast.py`). The hazard model still uses the event score.
+7.  **Save Results**: Saves the final predictions, including the confidence
     score, to a CSV file.
 """
 
@@ -37,6 +40,7 @@ from typing import Union
 
 # Import project-wide configurations
 import config
+import likelihood_forecast
 
 # --- Setup Logging ---
 logging.basicConfig(
@@ -164,6 +168,15 @@ def predict_avalanche_hazards(prediction_date: Union[str, datetime]) -> None:
             class_label_1 = class_label_0 + 1
             final_predictions_df[f'hazard_{class_label_1}_prob_calibrated'] = final_calibrated_probs[:, i]
 
+        # Dry slab likelihood; a failure here shouldn't stop the hazard output
+        likelihood_cols = []
+        try:
+            likelihood = likelihood_forecast.predict(pd.Timestamp(prediction_date))
+            final_predictions_df = final_predictions_df.merge(likelihood, on='polygon', how='left')
+            likelihood_cols = list(likelihood_forecast.OUTPUT_COLUMNS.values())
+        except Exception as e:
+            logging.error(f"Dry slab likelihood prediction failed; saving predictions without it: {e}", exc_info=True)
+
         # Save to standard CSV
         csv_output_path = config.PATHS["RESULTS"]["hazard_predictions_csv"]
         final_predictions_df.to_csv(csv_output_path, index=False)
@@ -183,10 +196,11 @@ def predict_avalanche_hazards(prediction_date: Union[str, datetime]) -> None:
         json_data_df.rename(columns=prob_rename_map, inplace=True)
         
         # Define the exact columns needed for the JSON output (model predictions only)
-        json_feature_cols = ['polygon', 'predicted_hazard', 'confidence', 'avalanche_event_propability'] + list(prob_rename_map.values())
+        json_feature_cols = ['polygon', 'predicted_hazard', 'confidence', 'avalanche_event_propability'] + list(prob_rename_map.values()) + likelihood_cols
 
-        # Convert the relevant part of the DataFrame to a list of dictionaries
-        features_list = json_data_df[json_feature_cols].to_dict(orient='records')
+        # Convert the relevant part of the DataFrame to a list of dictionaries (missing values as null)
+        json_values = json_data_df[json_feature_cols].astype(object)
+        features_list = json_values.where(json_values.notna(), None).to_dict(orient='records')
         
         # Construct the final JSON object
         json_output = {

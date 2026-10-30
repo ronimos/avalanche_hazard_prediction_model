@@ -311,7 +311,19 @@ Retraining does move the season's level, which matters only in a season like 202
 
 The Bayesian refits are also expensive: about 25 to 30 minutes each with three running at once. Ten of 18 finished with R-hat between 1.010 and 1.019, just over the target, though none had divergent transitions.
 
-Recommendation, to discuss: no mid-season retraining. Refit once before each season on all past seasons.
+Decided: no mid-season retraining. Refit once before each season on all past seasons.
+
+### Operational model
+
+The daily run uses the Bayesian model with the snowpack drivers only (`src/likelihood_forecast.py`). Recent activity is left out for two reasons. No live source of avalanche records is confirmed: the API in `config.py` appears to be a staging server, and none of its observation IDs match the CAIC export. And at the operational lag of 2 days, activity adds +0.003 to +0.007 to within-polygon AUC for dry slabs, with every interval including 0.
+
+On held-out seasons the drivers-only Bayesian model ranks days the same as the driver logistic regression: within-polygon AUC 0.819 / 0.819 / 0.888, paired differences −0.003 to +0.001, all intervals include 0 (`results/evaluation/lag2/dry_slab_bayes_drivers/`). One model gives both the probability and its interval, so the probability always lies inside the interval.
+
+- **Training.** `python likelihood_forecast.py --train` fits on every season in the modeling table, with 1,000 draws after 2,000 tuning steps per chain, and saves `artifacts/likelihood_model.joblib`. With the default 500 draws the all-season fit reached R-hat 1.017.
+- **Prediction.** `predict.py` calls `likelihood_forecast.predict` for the forecast day. Drivers come from the current season's SNOWPACK run. The forecast run ends partway through its last day, so a day is used only when the run continues past it. Building the drivers takes about 2 minutes.
+- **Output.** The CSV and JSON gain `dry_slab_probability` (posterior mean probability that a D2+ dry slab avalanche is recorded) and `dry_slab_probability_q10` / `_q90` (the 80% interval). The current season is new to the model, so its reporting level is drawn from the prior and the interval includes that uncertainty. The event score and danger rating are unchanged, and the danger rating still uses the old event score. The map has a new Dry Slab Likelihood layer, off by default, with colors capped at 10%.
+- **Outside November to May** the model extrapolates and the run logs a warning.
+- **If it fails**, the hazard outputs are still written without the new fields.
 
 ## Status and open questions
 
@@ -325,7 +337,7 @@ Work happens on the `dev` branch. The production forecast keeps running the curr
 - [ ] Rerun the 2024-25 fold of the model without activity with longer chains
 - [x] Backtest mid-season retraining (`src/retraining.py`): not worth it for either model
 - [x] Add recent regional activity as a forecastable feature (lag 2 by default)
-- [ ] Connect the model to `predict.py`, keeping the current output format
+- [x] Connect the model to `predict.py`, keeping the current output format (`src/likelihood_forecast.py`; new fields added)
 
 Open questions:
 

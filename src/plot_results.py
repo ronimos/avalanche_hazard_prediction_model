@@ -23,6 +23,9 @@ import numpy as np
 # Import project-wide configurations for consistent path management
 import config
 
+# Dry slab probabilities above this get the top color; most polygon-days are a few percent
+DRY_SLAB_COLOR_MAX = 0.1
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -203,7 +206,36 @@ def create_prediction_map(prediction_date: Union[str, datetime]):
     ).add_to(hazard_layer)
     hazard_layer.add_to(m)
 
-    # 4. NEW: Hazard Rating Prediction Layer (Confidence as Opacity)
+    # 4. Dry Slab Likelihood Layer (probability of a recorded D2+ dry slab avalanche)
+    if 'dry_slab_probability' in merged_gdf.columns:
+        dry_slab_colormap = cm.LinearColormap(
+            colors=['#3b82f6', '#facc15', '#ef4444', '#000000'],
+            vmin=0, vmax=DRY_SLAB_COLOR_MAX,
+            caption=f'Dry Slab Likelihood (D2+, capped at {DRY_SLAB_COLOR_MAX:.0%})'
+        )
+        m.add_child(dry_slab_colormap)
+        merged_gdf['dry_slab_str'] = merged_gdf.apply(
+            lambda r: f"{r['dry_slab_probability']:.1%} (80%: {r['dry_slab_probability_q10']:.1%} to {r['dry_slab_probability_q90']:.1%})"
+            if pd.notna(r['dry_slab_probability']) else 'No data', axis=1)
+        dry_slab_layer = folium.FeatureGroup(name='Dry Slab Likelihood', show=False)
+        folium.GeoJson(
+            merged_gdf,
+            style_function=lambda feature: {
+                'fillColor': dry_slab_colormap(min(feature['properties']['dry_slab_probability'], DRY_SLAB_COLOR_MAX))
+                if feature['properties']['dry_slab_probability'] is not None else '#e5e7eb',
+                'color': 'black',
+                'weight': 1,
+                'fillOpacity': 0.6
+            },
+            tooltip=folium.GeoJsonTooltip(
+                fields=['polygon_number', 'dry_slab_str'],
+                aliases=['Region:', 'Dry Slab Likelihood:'],
+                localize=True
+            )
+        ).add_to(dry_slab_layer)
+        dry_slab_layer.add_to(m)
+
+    # 5. NEW: Hazard Rating Prediction Layer (Confidence as Opacity)
     hazard_confidence_layer = folium.FeatureGroup(name='Hazard Rating (by Confidence)', show=False)
     folium.GeoJson(
         merged_gdf,
