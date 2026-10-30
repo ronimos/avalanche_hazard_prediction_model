@@ -6,8 +6,9 @@ Dry Slab Map: Daily Web Map of the Avalanche Likelihood Forecast
 
 Builds the page published as next_day_prediction.html: the forecast polygons on
 a street map or satellite imagery (Leaflet), colored by the probability of a
-D2+ dry slab avalanche, with the 80% range, snowpack context, the danger
-rating model's rating and the forecast's limitations.
+D2+ dry slab avalanche or by the chance that tomorrow's danger rating goes up
+or down (`hazard_change.py`), with the 80% range, snowpack context, CAIC's
+ratings and outlook, and the forecast's limitations.
 
 It reads the day's predictions CSV written by predict.py, so it runs after it.
 
@@ -33,6 +34,9 @@ TEMPLATE = Path(__file__).parent / "templates" / "dry_slab_map.html"
 # Degrees; keeps the page small without visibly changing polygon outlines
 SIMPLIFY_TOLERANCE = 0.002
 DANGER_LEVELS = {1: "Low", 2: "Moderate", 3: "Considerable", 4: "High"}
+BANDS = ["atl", "ntl", "btl"]
+# Rating change output column suffix -> property suffix on the page
+CHANGE_FIELDS = {"caic_today": "t", "caic_outlook": "o", "p_down": "d", "p_same": "s", "p_up": "u"}
 
 
 def output_path(date: pd.Timestamp) -> Path:
@@ -65,6 +69,8 @@ def map_features(polygons: gpd.GeoDataFrame, predictions: pd.DataFrame) -> dict:
                 "hs": _value(row, "snow_depth_m", 3),
                 "hn72": _value(row, "new_snow_72h_m", 3),
                 "danger": DANGER_LEVELS.get(int(danger), "No data") if pd.notna(danger) else "No data",
+                **{f"{band}_{short}": _value(row, f"{band}_{field}", 3)
+                   for band in BANDS for field, short in CHANGE_FIELDS.items()},
             },
         })
     return {"type": "FeatureCollection", "features": features}

@@ -369,66 +369,88 @@ What the forecast can and can't say, in order of how much each limits its use:
 
 ### Objective and target
 
-A first guess for forecasters: for each polygon and elevation band (above, near and below treeline), the probability that CAIC's danger rating for day t goes down, stays the same or goes up from its rating for day t−1. The run finishes at noon on t−1, when the rating for t−1 is already published, so the model starts from it.
+A second opinion for forecasters: for each polygon and elevation band (above, near and below treeline), the probability that CAIC's danger rating for day t goes down, stays the same or goes up from its rating for day t−1. The run finishes at noon on t−1, when the rating for t−1 is already published, so the model starts from it.
 
-The model doesn't predict a single rating. Carrying the rating for t−1 forward is right on 75% of days (quadratic weighted kappa 0.76 on the highest band). On held-out seasons, logistic regression and gradient-boosted trees that predict the rating directly matched or fell below that in every band. About 80% of days don't change, so a predicted change costs more on stable days than it gains on change days. The skill lies in ranking which days are likely to change.
+The model doesn't predict a single rating. Carrying the rating for t−1 forward is right on 75% of days in 2023-24 and 2024-25 (quadratic weighted kappa 0.76 on the highest band). On held-out seasons, logistic regression and gradient-boosted trees that predict the rating directly matched or fell below that in every band. About 80% of days don't change, so a predicted change costs more on stable days than it gains on change days. The skill lies in ranking which days are likely to change.
 
-A change of two levels counts as one step (−1, 0 or +1). There is no decrease from Low or increase from High; CAIC used Extreme on none of these days.
+A change of two levels counts as one step (−1, 0 or +1). There is no decrease from Low or increase from Extreme.
 
 ### Data
 
 | Source | Location | Coverage |
 | --- | --- | --- |
-| CAIC danger ratings | `data/raw/danger_rating.csv` | 82 of the 147 polygons, 2023-12-01 to 2025-06-01 (2023-24 and 2024-25, 183 days each), one rating per band; 0 = not rated |
-| Drivers and recent activity | The likelihood modeling table (`src/likelihood_data.py`) | 99.4% of rated polygon-days |
+| CAIC danger ratings, 2023-24 and 2024-25 | `data/raw/danger_rating.csv` | 82 polygons, 183 days a season, one rating per band; 0 = not rated |
+| CAIC forecasts from AvID, 2025-26 | `data/raw/danger_rating_avid.csv`, imported by `src/caic_ratings.py` from the saved forecasts in AvyScribe (`data/all_forecasts.json`) | 125 polygons, 2025-11-01 to 2026-02-28; each forecast's three days, so CAIC's outlook is kept too |
+| Drivers | The likelihood modeling table (`src/likelihood_data.py`) | 99.4% of rated polygon-days |
 
-CAIC rates by forecast zone, so the 82 polygons move largely together: on a typical day their highest-band ratings take only two distinct values. The effective sample is much smaller than the 14,000 rows per band and season.
+Each AvID forecast lists its polygons by the `id` of the polygon GeoJSON and rates three days. Forecasts go out around 4 PM Mountain time: day 1 is the next day's rating, and days 2 and 3 are CAIC's outlook. The saved forecasts go back to October 2022, but before 2025-26 they use an older polygon set whose IDs aren't in the current polygon file, and there is no SNOWPACK output for 2022-23.
+
+CAIC rates by forecast zone, so polygons move largely together: on a typical day their highest-band ratings take only two distinct values. The effective sample is much smaller than the 14,500 to 14,900 rows per band and season.
 
 ### Features
 
 - **Ratings known at noon on t−1:** the band's rating for t−1, its change from t−2, and the other two bands' ratings for t−1. Only consecutive days are used; a gap or an unrated day leaves them missing.
 - **Snowpack drivers for day t:** the 14 drivers and the stability-cap indicators of the likelihood model, and day of season. SNOWPACK is forced by NWP, as in the daily run.
 - **Regional means** of new snow (24 and 72 h), 3-day SWE change, maximum wind and the 24 h temperature change, over the polygon's forecast region. Ratings are issued by zone, and these carry the storm signal across it.
-- **Recent recorded activity** (`likelihood_data.ACTIVITY_FEATURES`, lag 2).
+
+Recent recorded activity was tried and added at most 0.01 of log-loss skill in any band and season. There is no live feed of avalanche records, so it is left out.
 
 ### Model and baseline
 
-- **Model:** one multinomial logistic regression per band (median imputation, standardization, L2 penalty with C = 0.01), in `src/hazard_change.py`. Impossible changes are set to zero and the rest renormalized.
+- **Model:** one multinomial logistic regression per band (median imputation, standardization, L2 penalty with C = 0.003), in `src/hazard_change.py`. Impossible changes are set to zero and the rest renormalized.
 - **Baseline:** the training seasons' frequency of each change given the rating for t−1 and the sign of its trend (Laplace smoothing).
 
-C was chosen from 0.003 to 0.3 on held-out log loss and calibration: at C = 0.3, days given about 70% for an increase went up 58% of the time; at 0.01 the log-loss skill was highest and most of that overconfidence was gone. Gradient-boosted trees ranked no better than the logistic regression.
+C was chosen from 0.001 to 0.03 on held-out log loss and calibration: 0.003 had the highest mean and worst-case log-loss skill and was better calibrated at the top than 0.01 or 0.03. Gradient-boosted trees ranked no better than the logistic regression.
 
 ### Evaluation
 
-Leave-one-season-out over the two rated seasons. `python hazard_change.py` writes `results/hazard_change/` (`predictions.csv`, `metrics.csv`, `reliability.csv`).
+Leave-one-season-out over the three rated seasons. `python hazard_change.py` writes `results/hazard_change/` (`predictions.csv`, `metrics.csv`, `reliability.csv`).
 
 | Band | Held-out season | Days up / down | AUC of an increase, model (baseline) | AUC of a decrease, model (baseline) | Log-loss skill | Brier skill |
 | --- | --- | --- | --- | --- | --- | --- |
-| Above treeline | 2023-24 | 13.6% / 15.0% | 0.83 (0.69) | 0.85 (0.74) | 0.15 | 0.14 |
-| Above treeline | 2024-25 | 10.9% / 11.7% | 0.80 (0.67) | 0.87 (0.79) | 0.14 | 0.13 |
-| Near treeline | 2023-24 | 11.5% / 12.8% | 0.83 (0.67) | 0.86 (0.76) | 0.17 | 0.16 |
-| Near treeline | 2024-25 | 8.8% / 10.6% | 0.77 (0.66) | 0.87 (0.78) | 0.12 | 0.10 |
-| Below treeline | 2023-24 | 9.1% / 10.1% | 0.72 (0.54) | 0.89 (0.84) | 0.07 | 0.05 |
-| Below treeline | 2024-25 | 7.2% / 8.6% | 0.72 (0.56) | 0.90 (0.87) | 0.06 | 0.05 |
+| Above treeline | 2023-24 | 13.6% / 15.0% | 0.79 (0.68) | 0.84 (0.74) | 0.14 | 0.13 |
+| Above treeline | 2024-25 | 10.9% / 11.7% | 0.78 (0.67) | 0.87 (0.79) | 0.12 | 0.12 |
+| Above treeline | 2025-26 | 6.7% / 6.8% | 0.85 (0.54) | 0.88 (0.86) | 0.12 | 0.09 |
+| Near treeline | 2023-24 | 11.5% / 12.8% | 0.80 (0.65) | 0.84 (0.75) | 0.14 | 0.13 |
+| Near treeline | 2024-25 | 8.8% / 10.6% | 0.75 (0.65) | 0.86 (0.78) | 0.09 | 0.08 |
+| Near treeline | 2025-26 | 6.9% / 7.2% | 0.85 (0.60) | 0.87 (0.87) | 0.07 | 0.05 |
+| Below treeline | 2023-24 | 9.1% / 10.1% | 0.70 (0.52) | 0.88 (0.85) | 0.08 | 0.05 |
+| Below treeline | 2024-25 | 7.2% / 8.6% | 0.73 (0.53) | 0.90 (0.87) | 0.06 | 0.04 |
+| Below treeline | 2025-26 | 3.7% / 3.4% | 0.91 (0.52) | 0.94 (0.94) | 0.14 | 0.12 |
 
-Skill is the fractional improvement over the baseline. The model beats it in every band and season. The snowpack drivers carry the gain: dropping the ratings for t−2 and t−3 changes almost nothing. Decreases are easier to rank than increases, and the baseline already ranks them well (AUC 0.74 to 0.87), so the model adds less there.
+Skill is the fractional improvement over the baseline. The model beats it in every band and season, mostly on increases; the baseline already ranks decreases well (AUC 0.74 to 0.94). The snowpack drivers carry the gain: in the two-season experiments, ratings before t−1 added almost nothing.
 
-Calibration, both seasons pooled: below a predicted 30% the observed rates match within a few points. Above 50%:
+Calibration, all seasons pooled: up to a predicted 50% the observed rates are within 6 points of the predicted ones, and mostly a little lower. Above 50% the model is overconfident: days given about 69% for an increase went up 54 to 56% of the time in every band. For decreases above 50%, the observed rate is 66 to 67% above and near treeline (predicted 62%) and 53% below treeline (predicted 67%).
 
-| Band | Days predicted over 50% to go up | Predicted | Observed | Days predicted over 50% to go down | Predicted | Observed |
-| --- | --- | --- | --- | --- | --- | --- |
-| Above treeline | 1,174 | 0.70 | 0.64 | 1,154 | 0.63 | 0.64 |
-| Near treeline | 739 | 0.68 | 0.65 | 960 | 0.61 | 0.65 |
-| Below treeline | 324 | 0.69 | 0.44 | 920 | 0.68 | 0.49 |
+### Against CAIC's outlook
 
-Below treeline is overconfident at the top and has the least skill; its high probabilities should be read as "a change is more likely than usual", not taken at face value.
+CAIC's own outlook for day t, day 2 of the forecast issued at 4 PM on t−2, is out by noon on t−1. In 2025-26 it was right on 93%, 92% and 95% of polygon-days above, near and below treeline, against 86%, 86% and 93% for carrying the rating forward. Held-out on 2025-26, with as many days flagged as the outlook flags:
+
+| Band | Change | Days | Outlook catches | Outlook flags right | Model catches | Model flags right | Missed by the outlook | Model AUC on days the outlook shows no change |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Above treeline | Up | 960 | 84% | 72% | 46% | 39% | 154 | 0.67 |
+| Above treeline | Down | 971 | 68% | 76% | 25% | 28% | 316 | 0.84 |
+| Near treeline | Up | 1,020 | 67% | 78% | 37% | 42% | 334 | 0.76 |
+| Near treeline | Down | 1,056 | 60% | 75% | 25% | 31% | 422 | 0.87 |
+| Below treeline | Up | 551 | 67% | 67% | 44% | 44% | 184 | 0.92 |
+| Below treeline | Down | 504 | 48% | 87% | 19% | 35% | 263 | 0.94 |
+
+The outlook is far better at calling changes; the forecasters see more than the snowpack drivers carry. The model's use is on the days the outlook shows no change: there it still ranks the changes that came, best below treeline and for decreases. The outlook is only available as a feature for one season, so it isn't in the model yet; with more seasons of AvID forecasts, the change from the outlook is the natural target.
+
+### Daily run
+
+- **Ratings.** `caic_ratings.fetch_current` pulls the current forecasts from the AvID API (`AVID_API_BASE` and `AVID_API_KEY` or `API_KEY` in the project's `.env`, read by `config.py`) and adds them to `data/processed/caic_ratings_history.csv`. The forecast current at noon on t−1 gives the rating for t−1 and CAIC's outlook for t; the history gives the rating for t−2.
+- **Training.** `python hazard_change.py --train` fits on every season with ratings and saves `artifacts/hazard_change_model.joblib`.
+- **Prediction.** `predict.py` calls `hazard_change.predict` after the likelihood forecast, reusing its driver table. Polygons CAIC didn't rate on t−1 get no prediction. A failure, such as a missing key, logs an error and leaves the other outputs in place.
+- **Output.** The CSV and JSON gain, per band (`atl`, `ntl`, `btl`): `_caic_today`, `_caic_outlook`, `_p_down`, `_p_same` and `_p_up`. The map adds **Rating up** and **Rating down** layers with a band menu, and each polygon's panel shows today's rating, CAIC's outlook and the three probabilities.
 
 ### Limitations
 
-1. **Two seasons.** Each held-out score comes from one season and there are no confidence intervals. More seasons of ratings are being collected.
-2. **Live ratings feed.** The model needs CAIC's rating for t−1 for every rated polygon. The pipeline has only the historical file, so the model isn't in the daily run yet.
-3. **Rated polygons only.** The 65 polygons CAIC doesn't rate get no prediction.
-4. **It predicts CAIC's ratings, not avalanche conditions.** It learns when forecasters change the rating, including their habits, such as stepping down after storms.
+1. **Three seasons, one of them new.** Each held-out score comes from one season and there are no confidence intervals. 2025-26 adds 51 polygons that weren't in the earlier file and lacks 8 that were, and it ends on February 28.
+2. **It predicts CAIC's ratings, not avalanche conditions.** It learns when forecasters change the rating, including their habits, such as stepping down after storms.
+3. **CAIC's outlook is better at calling changes.** Read the model next to it, not instead of it.
+4. **Rated polygons only.** Polygons CAIC doesn't rate get no prediction.
+5. **High probabilities run high.** Above 50%, about 55% of predicted increases happened.
 
 Work happens on the `dev` branch. The production forecast keeps running the current models until the new one beats both baselines on held-out seasons.
 
@@ -442,11 +464,11 @@ Work happens on the `dev` branch. The production forecast keeps running the curr
 - [x] Add recent regional activity as a forecastable feature (lag 2 by default)
 - [x] Connect the model to `predict.py`, keeping the current output format (`src/likelihood_forecast.py`; new fields added)
 - [x] Model the probability that tomorrow's danger rating changes, per band (`src/hazard_change.py`, with tests)
-- [ ] Add the rating change to the daily run and the map (needs a live feed of CAIC ratings)
+- [x] Add the rating change to the daily run and the map (`src/caic_ratings.py` pulls the ratings from AvID)
+- [ ] Add CAIC's outlook as a feature once there are more seasons of AvID forecasts
 
 Open questions:
 
-- **Live CAIC ratings.** Where can the daily run read the ratings for t−1 per polygon and band?
 - **Observer access by polygon.** Highway paths, ski-area boundaries and trailhead locations would give the detection model its strongest covariates. Is there a layer for these?
 - **Detection prior.** Which other polygons can be treated as near-fully monitored, like polygon 132 on the Red Mountain Pass corridor?
 - **Avalanche terrain by polygon.** Deferred: the area of avalanche-prone slopes (about 30–45°) from a DEM, as an occurrence covariate, would let the model attribute part of the difference between polygons to terrain instead of reporting.

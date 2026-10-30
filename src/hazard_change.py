@@ -11,9 +11,13 @@ gives, for each elevation band, the probability that the rating for t goes
 down, stays the same or goes up from the rating for t-1.
 
 Features: the polygon's ratings for t-1 (all bands) and the trend from t-2,
-the snowpack drivers for t (SNOWPACK forced by NWP), their regional means, and
-recorded activity through t-2 (`likelihood_data`). Ratings move by zone, so
-the regional means carry the storm signal.
+the snowpack drivers for t (SNOWPACK forced by NWP) and their regional means.
+Ratings move by zone, so the regional means carry the storm signal. Recent
+recorded activity added at most 0.01 of log-loss skill and has no live feed,
+so it is left out.
+
+Ratings come from data/raw/danger_rating.csv (2023-24 and 2024-25) and the
+AvID forecasts (`caic_ratings.py`, 2025-26 on).
 
 The baseline knows only the rating for t-1 and its trend: the training
 seasons' transition frequencies.
@@ -24,13 +28,25 @@ Evaluation is leave-one-season-out, as for the likelihood model:
     - AUC of the probability of an increase and of a decrease;
     - reliability: predicted against observed rate, binned.
 
+Daily run: `predict` pulls the current CAIC forecasts from AvID (today's
+rating and CAIC's outlook for tomorrow), adds yesterday's rating from the
+ratings history, and gives the three probabilities per band for every polygon
+CAIC rated today. Drivers come from the same SNOWPACK build as the likelihood
+forecast.
+
 Usage:
-    python hazard_change.py
+    python hazard_change.py                    # held-out-season evaluation
+    python hazard_change.py --train            # fit on all seasons and save
+    python hazard_change.py --date 2026-12-15  # predict one day
 
 Author: Ron Simenhois
 """
+import argparse
 import logging
-from typing import Dict, List
+from datetime import datetime
+from typing import Dict, List, Optional
+
+import joblib
 
 import numpy as np
 import pandas as pd
@@ -40,19 +56,20 @@ from sklearn.metrics import log_loss, roc_auc_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
+import caic_ratings
 import config
 import likelihood_data as ld
+import likelihood_forecast
 
 BANDS = ["atl", "ntl", "btl"]
-LEVELS = (1, 4)  # Low to High; CAIC's 0 means no rating
+LEVELS = (1, 5)  # Low to Extreme; CAIC's 0 means no rating
 # Change from the rating for t-1, in model column order
 CHANGES = [-1, 0, 1]
 CHANGE_NAMES = ["down", "same", "up"]
 
 # Drivers averaged over the forecast region, since ratings are issued by zone
 REGIONAL_DRIVERS = ["HN24", "HN72", "SWE_change_3d", "VW_max", "TA_max_change_24h"]
-DRIVER_FEATURES = (ld.DRIVERS + ["day_of_season", "Sn_capped", "Ss_capped"] + ld.ACTIVITY_FEATURES
-                   + [f"{c}_region" for c in REGIONAL_DRIVERS])
+DRIVER_FEATURES = ld.DRIVERS + ["day_of_season", "Sn_capped", "Ss_capped"] + [f"{c}_region" for c in REGIONAL_DRIVERS]
 OUTPUT_DIR = config.RESULTS_DIR / "hazard_change"
 
 
@@ -62,8 +79,12 @@ def rating_features(band: str) -> List[str]:
 
 
 def load_ratings() -> pd.DataFrame:
-    """CAIC danger ratings per polygon and day, with 0 (not rated) as missing."""
+    """CAIC danger ratings per polygon and day, with 0 (not rated) as missing: the ratings file plus, for days it lacks, the AvID ratings."""
     ratings = pd.read_csv(config.PATHS["RAW_DATA"]["danger_ratings"], parse_dates=["date"])
+    avid_path = config.PATHS["RAW_DATA"]["avid_ratings"]
+    if avid_path.exists():
+        avid = caic_ratings.day_ratings(pd.read_csv(avid_path, parse_dates=["date"]))
+        ratings = pd.concat([ratings, avid], ignore_index=True).drop_duplicates(["polygon", "date"], keep="first")
     ratings[BANDS] = ratings[BANDS].where(ratings[BANDS] > 0)
     return ratings.sort_values(["polygon", "date"]).reset_index(drop=True)
 
@@ -99,7 +120,7 @@ def build_change_table(table: pd.DataFrame, ratings: pd.DataFrame) -> pd.DataFra
 
 
 def _mask_impossible(proba: np.ndarray, prev: np.ndarray) -> np.ndarray:
-    """No decrease from Low and no increase from High (the data has no Extreme); renormalizes."""
+    """No decrease from Low and no increase from Extreme; renormalizes."""
     proba = proba.copy()
     proba[prev <= LEVELS[0], 0] = 0.0
     proba[prev >= LEVELS[1], 2] = 0.0
@@ -131,7 +152,7 @@ class TransitionModel:
 class ChangeModel:
     """Multinomial logistic regression of the change on ratings and drivers."""
 
-    def __init__(self, band: str, C: float = 0.01):
+    def __init__(self, band: str, C: float = 0.003):
         self.band = band
         self.columns = rating_features(band) + DRIVER_FEATURES
         self.pipeline = make_pipeline(SimpleImputer(strategy="median"), StandardScaler(),
@@ -213,7 +234,76 @@ def reliability(predictions: pd.DataFrame, edges: List[float] = (0, 0.05, 0.1, 0
     return pd.concat(records, ignore_index=True)
 
 
-def main() -> None:
+def output_columns() -> List[str]:
+    """Daily output per band: CAIC's rating for t-1, CAIC's outlook for t, and the three probabilities."""
+    return [f"{band}_{name}" for band in BANDS
+            for name in ["caic_today", "caic_outlook", *[f"p_{change}" for change in CHANGE_NAMES]]]
+
+
+def train() -> None:
+    """Fits one model per band on every season with ratings and saves them."""
+    table = build_change_table(ld.load_modeling_table(), load_ratings())
+    models = {band: ChangeModel(band).fit(band_rows(table, band)) for band in BANDS}
+    path = config.PATHS["ARTIFACTS"]["hazard_change_model"]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    seasons = sorted(int(s) for s in table["season"].unique())
+    joblib.dump({"models": models, "seasons": seasons}, path)
+    logging.info(f"Hazard change models trained on seasons {seasons} and saved to '{path}'.")
+
+
+def forecast_inputs(date: pd.Timestamp, ratings: pd.DataFrame, drivers: pd.DataFrame) -> pd.DataFrame:
+    """
+    Model inputs for day t, one row per polygon rated on t-1 with drivers for t.
+
+    Args:
+        date (pd.Timestamp): Forecast day t.
+        ratings (pd.DataFrame): CAIC ratings per polygon and day (`caic_ratings.day_ratings`).
+                                Only days before t are used.
+        drivers (pd.DataFrame): Modeling-table rows for day t (`likelihood_forecast.forecast_table`).
+    """
+    known = ratings[ratings["date"] < date]
+    rated_yesterday = known.loc[known["date"] == date - pd.Timedelta(days=1), ["polygon"]]
+    # A row for day t without ratings, so the lags for t line up
+    ratings = pd.concat([known, rated_yesterday.assign(date=date)], ignore_index=True)
+    drivers = drivers.assign(region=drivers["polygon"].map(ld.polygon_regions()))
+    return build_change_table(drivers, ratings.sort_values(["polygon", "date"]))
+
+
+def predict(date: pd.Timestamp, history: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    """
+    Probability that each band's rating goes down, stays or goes up on day t, for every polygon CAIC rated on t-1.
+
+    Args:
+        date (pd.Timestamp): Forecast day t.
+        history (Optional[pd.DataFrame]): AvID ratings (`caic_ratings.COLUMNS`). By default the
+                                          current forecasts are pulled and added to the history.
+
+    Returns:
+        pd.DataFrame: 'polygon' plus `output_columns()`.
+    """
+    fitted = joblib.load(config.PATHS["ARTIFACTS"]["hazard_change_model"])
+    history = caic_ratings.fetch_current() if history is None else history
+    rows = forecast_inputs(date, caic_ratings.day_ratings(history), likelihood_forecast.forecast_table(date))
+    if rows.empty:
+        logging.warning(f"No CAIC ratings for {(date - pd.Timedelta(days=1)).date()}; no rating change forecast for {date.date()}.")
+        return pd.DataFrame(columns=["polygon", *output_columns()]).astype({"polygon": int})
+
+    outlook = history[(history["position"] == 2) & (history["date"] == date)].set_index("polygon")
+    out = rows[["polygon"]].copy()
+    for band in BANDS:
+        rated = rows[f"{band}_prev"].notna().to_numpy()
+        proba = np.full((len(rows), len(CHANGES)), np.nan)
+        if rated.any():
+            proba[rated] = fitted["models"][band].predict_proba(rows[rated])
+        out[f"{band}_caic_today"] = rows[f"{band}_prev"].to_numpy()
+        out[f"{band}_caic_outlook"] = out["polygon"].map(outlook[band]) if band in outlook else np.nan
+        for i, change in enumerate(CHANGE_NAMES):
+            out[f"{band}_p_{change}"] = proba[:, i]
+    return out.reset_index(drop=True)
+
+
+def evaluate() -> None:
+    """Held-out-season evaluation; writes predictions, scores and reliability to OUTPUT_DIR."""
     table = build_change_table(ld.load_modeling_table(), load_ratings())
     predictions = pd.concat([leave_one_season_out(table, band) for band in BANDS], ignore_index=True)
     metrics, calibration = scores(predictions), reliability(predictions)
@@ -229,6 +319,22 @@ def main() -> None:
     logging.info(f"Results saved to '{OUTPUT_DIR}'")
 
 
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Evaluate, train or run the danger rating change model.")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--train", action="store_true", help="Fit on all seasons with ratings and save the models.")
+    group.add_argument("--date", type=str, help="Forecast day, YYYY-MM-DD: pull CAIC's forecasts and predict.")
+    args = parser.parse_args()
+    if args.train:
+        train()
+    elif args.date:
+        print(predict(pd.Timestamp(datetime.strptime(args.date, "%Y-%m-%d"))).round(3).to_string(index=False))
+    else:
+        evaluate()
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-    main()
+    # Run through the imported module, so saved models refer to hazard_change.ChangeModel, not __main__
+    import hazard_change
+    hazard_change.main()

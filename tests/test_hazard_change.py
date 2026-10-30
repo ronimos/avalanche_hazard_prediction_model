@@ -47,11 +47,28 @@ def test_load_ratings_treats_zero_as_not_rated(tmp_path, monkeypatch):
     path = tmp_path / "danger_rating.csv"
     _ratings(1, "2024-01-01", [(0, 2, 1), (3, 2, 1)]).to_csv(path, index=False)
     monkeypatch.setitem(hc.config.PATHS["RAW_DATA"], "danger_ratings", path)
+    monkeypatch.setitem(hc.config.PATHS["RAW_DATA"], "avid_ratings", tmp_path / "missing.csv")
 
     ratings = hc.load_ratings()
 
     assert ratings["atl"].isna().sum() == 1
     assert ratings["ntl"].tolist() == [2, 2]
+
+
+def test_load_ratings_adds_avid_days_the_file_lacks(tmp_path, monkeypatch):
+    path, avid_path = tmp_path / "danger_rating.csv", tmp_path / "avid.csv"
+    _ratings(1, "2024-01-01", [2]).to_csv(path, index=False)
+    pd.DataFrame({"polygon": [1, 1, 1], "date": ["2024-01-01", "2025-12-01", "2025-12-01"], "position": [1, 1, 2],
+                  "issued": "x", "atl": [3, 4, 1], "ntl": [3, 4, 1], "btl": [3, 4, 1]}).to_csv(avid_path, index=False)
+    monkeypatch.setitem(hc.config.PATHS["RAW_DATA"], "danger_ratings", path)
+    monkeypatch.setitem(hc.config.PATHS["RAW_DATA"], "avid_ratings", avid_path)
+
+    ratings = hc.load_ratings().set_index("date")
+
+    # The ratings file wins where both have a day; outlook positions aren't ratings
+    assert ratings.loc["2024-01-01", "atl"] == 2
+    assert ratings.loc["2025-12-01", "atl"] == 4
+    assert len(ratings) == 2
 
 
 def test_change_is_clipped_to_one_level():
@@ -75,7 +92,7 @@ def test_regional_drivers_are_means_over_the_region():
 def test_impossible_changes_are_masked():
     proba = np.full((3, 3), 1 / 3)
 
-    masked = hc._mask_impossible(proba, np.array([1, 2, 4]))
+    masked = hc._mask_impossible(proba, np.array([1, 2, 5]))
 
     assert masked[0, 0] == 0 and masked[2, 2] == 0
     np.testing.assert_allclose(masked.sum(axis=1), 1)
@@ -159,3 +176,60 @@ def test_baseline_skill_is_zero_and_better_model_is_positive():
 
     assert (scores.xs("transition", level="model")["log_loss_skill"] == 0).all()
     assert (scores.xs("change_logistic", level="model")["log_loss_skill"] > 0).all()
+
+
+def _history(polygon, ratings_by_day, outlook=None):
+    """AvID history rows: day-1 ratings per day, plus an optional outlook (position 2) row."""
+    rows = [{"polygon": polygon, "date": pd.Timestamp(day), "position": 1, "issued": "x", "atl": v, "ntl": v, "btl": v}
+            for day, v in ratings_by_day.items()]
+    if outlook:
+        day, v = outlook
+        rows.append({"polygon": polygon, "date": pd.Timestamp(day), "position": 2, "issued": "x", "atl": v, "ntl": v, "btl": v})
+    return pd.DataFrame(rows)
+
+
+def test_forecast_inputs_use_ratings_before_the_forecast_day_only():
+    ratings = pd.DataFrame({"polygon": 1, "date": pd.to_datetime(["2025-12-13", "2025-12-14", "2025-12-15"]),
+                            "atl": [2, 3, 4], "ntl": [2, 3, 4], "btl": [2, 3, 4]})
+    drivers = _table(_ratings(1, "2025-12-15", [0]))
+
+    rows = hc.forecast_inputs(pd.Timestamp("2025-12-15"), ratings, drivers)
+
+    assert len(rows) == 1
+    assert rows["atl_prev"].item() == 3 and rows["atl_trend"].item() == 1
+    assert np.isnan(rows["atl"].item())
+
+
+def test_predict_gives_probabilities_and_caic_ratings(tmp_path, monkeypatch):
+    df = _synthetic()
+    models = {band: hc.ChangeModel(band).fit(hc.band_rows(df, band)) for band in hc.BANDS}
+    path = tmp_path / "hazard_change_model.joblib"
+    import joblib
+    joblib.dump({"models": models, "seasons": [2023, 2024]}, path)
+    monkeypatch.setitem(hc.config.PATHS["ARTIFACTS"], "hazard_change_model", path)
+    date = pd.Timestamp("2025-12-15")
+    monkeypatch.setattr(hc.likelihood_forecast, "forecast_table",
+                        lambda d: _table(pd.concat([_ratings(1, d, [0]), _ratings(2, d, [0])]), season=2025))
+    history = pd.concat([_history(1, {"2025-12-13": 2, "2025-12-14": 3}, outlook=("2025-12-15", 4)),
+                         _history(2, {"2025-12-10": 2})])
+
+    out = hc.predict(date, history=history)
+
+    # Polygon 2 wasn't rated yesterday, so it gets no forecast
+    assert out["polygon"].tolist() == [1]
+    assert list(out.columns) == ["polygon", *hc.output_columns()]
+    assert out["atl_caic_today"].item() == 3 and out["atl_caic_outlook"].item() == 4
+    total = out[[f"atl_p_{c}" for c in hc.CHANGE_NAMES]].sum(axis=1).item()
+    assert total == pytest.approx(1)
+
+
+def test_predict_without_ratings_returns_empty_columns(tmp_path, monkeypatch):
+    import joblib
+    path = tmp_path / "model.joblib"
+    joblib.dump({"models": {}, "seasons": []}, path)
+    monkeypatch.setitem(hc.config.PATHS["ARTIFACTS"], "hazard_change_model", path)
+    monkeypatch.setattr(hc.likelihood_forecast, "forecast_table", lambda d: _table(_ratings(1, d, [0])))
+
+    out = hc.predict(pd.Timestamp("2025-10-30"), history=_history(1, {}).reindex(columns=hc.caic_ratings.COLUMNS))
+
+    assert out.empty and list(out.columns) == ["polygon", *hc.output_columns()]

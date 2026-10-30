@@ -76,6 +76,10 @@ def train() -> None:
     logging.info(f"Likelihood model trained on seasons {list(model._seasons)} and saved to '{path}'.")
 
 
+# Forecast tables already built in this run, by day; building one takes about 2 minutes
+_FORECAST_TABLES = {}
+
+
 def forecast_table(date: pd.Timestamp) -> pd.DataFrame:
     """
     Model inputs for every polygon on one day, from the current season's SNOWPACK run.
@@ -86,6 +90,12 @@ def forecast_table(date: pd.Timestamp) -> pd.DataFrame:
     Returns:
         pd.DataFrame: One row per polygon with a complete day of drivers.
     """
+    if date not in _FORECAST_TABLES:
+        _FORECAST_TABLES[date] = _build_forecast_table(date)
+    return _FORECAST_TABLES[date].copy()
+
+
+def _build_forecast_table(date: pd.Timestamp) -> pd.DataFrame:
     drivers = sd.build_driver_table([season_of(date)])
     drivers["date"] = pd.to_datetime(drivers["date"])
     complete = drivers.groupby("polygon")["date"].transform("max") > date

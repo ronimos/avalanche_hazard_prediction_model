@@ -33,7 +33,15 @@ header .meta { color: var(--muted); margin: 4px 0 0; }
 .switch button { font: 600 0.95rem var(--display); letter-spacing: 0.03em; padding: 7px 12px; border: 0; background: transparent; color: var(--fg); cursor: pointer; }
 .switch button + button { border-left: 1px solid var(--edge); }
 .switch button[aria-pressed="true"] { background: var(--accent); color: var(--bg); }
-button:focus-visible, .row:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+button:focus-visible, select:focus-visible, .row:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.controls { display: grid; gap: 8px; justify-items: end; }
+.control { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: end; }
+.control > span { font: 600 0.8rem var(--display); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.control select { font: 600 0.95rem var(--display); letter-spacing: 0.03em; padding: 6px 8px; border: 1px solid var(--edge); border-radius: 6px; background: var(--panel); color: var(--fg); }
+@media (max-width: 820px) { .controls, .control { justify-items: start; justify-content: start; } }
+table.rc { margin-top: 14px; font-size: 0.88rem; }
+table.rc th, table.rc td { padding: 4px 6px; }
+table.rc td:first-child { color: var(--muted); }
 .main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 20px; align-items: start; }
 @media (max-width: 820px) { .main { grid-template-columns: minmax(0, 1fr); } }
 .mapbox { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-width: 0; }
@@ -71,19 +79,36 @@ td.num, th.num { text-align: right; }
   <header>
     <div>
       <div class="eyebrow">Avalanche likelihood model</div>
-      <h1>D2+ Dry Slab Avalanche Probability</h1>
+      <h1>D2+ Dry Slab Probability and Danger Rating Change</h1>
       <p class="meta">Forecast for __DATE_LONG__ · generated __GENERATED__ · __N__ polygons</p>
     </div>
-    <div class="switch" role="group" aria-label="Map shows">
-      <button id="v-p" data-view="p" aria-pressed="true">Best estimate</button>
-      <button id="v-lo" data-view="lo" aria-pressed="false">Low end</button>
-      <button id="v-hi" data-view="hi" aria-pressed="false">High end</button>
+    <div class="controls">
+      <div class="control">
+        <span>Dry slab</span>
+        <div class="switch" role="group" aria-label="Dry slab probability">
+          <button id="v-p" data-view="p" aria-pressed="true">Best estimate</button>
+          <button id="v-lo" data-view="lo" aria-pressed="false">Low end</button>
+          <button id="v-hi" data-view="hi" aria-pressed="false">High end</button>
+        </div>
+      </div>
+      <div class="control">
+        <span>Danger rating</span>
+        <div class="switch" role="group" aria-label="Chance the danger rating changes">
+          <button id="v-up" data-view="up" aria-pressed="false">Rating up</button>
+          <button id="v-down" data-view="down" aria-pressed="false">Rating down</button>
+        </div>
+        <select id="band" aria-label="Elevation band">
+          <option value="atl">Above treeline</option>
+          <option value="ntl">Near treeline</option>
+          <option value="btl">Below treeline</option>
+        </select>
+      </div>
     </div>
   </header>
 
   <div class="main">
     <div class="mapbox">
-      <div id="map" role="img" aria-label="Colorado forecast polygons colored by dry slab avalanche probability"></div>
+      <div id="map" role="img" aria-label="Colorado forecast polygons colored by the selected layer"></div>
       <div class="legend" id="legend"></div>
     </div>
     <div class="detail">
@@ -95,6 +120,12 @@ td.num, th.num { text-align: right; }
         <p>Example: "8%, 80% range 4% to 12%" means the best estimate is 8%, and the model would be surprised, but not shocked, if the true value were as low as 4% or as high as 12%.</p>
         <p>The buttons recolor the map. <b>Low end</b> shows each polygon at the bottom of its range, the most optimistic value the model finds plausible. <b>High end</b> shows the top of the range, the most pessimistic plausible value, for a cautious reading. Each polygon is shown at its own end; the high-end map is not one scenario in which every polygon is at its worst at once.</p>
         <p>The range is the model's uncertainty about the right probability. It is not a range of weather outcomes or avalanche sizes, and it doesn't cover the equal-rate assumption described below.</p>
+      </div>
+      <div class="card notes">
+        <h2>Danger rating change</h2>
+        <p><b>Rating up</b> and <b>Rating down</b> color the map by the chance that CAIC's rating for the selected band tomorrow is higher, or lower, than today's. The model uses today's rating, its change since yesterday, and the snowpack and weather forecast for tomorrow. Polygons CAIC didn't rate today are gray.</p>
+        <p>It is a second opinion next to <b>CAIC's outlook</b>, the rating for tomorrow in today's forecast, shown in the polygon's table. In 2025-26 the outlook was right on 92 to 95% of polygon-days and caught more of the changes than the model. The model's value is on days the snowpack and weather point to a change the outlook doesn't show.</p>
+        <p>High values run high: on held-out seasons, days given over 50% changed about 55% of the time.</p>
       </div>
     </div>
   </div>
@@ -123,10 +154,25 @@ const DATA = __DATA__;
 const BINS = [0, 0.01, 0.02, 0.05, 0.10, 0.20, 0.35];
 const COLORS = ["#e3ebf0", "#bdd3e1", "#f2d68f", "#efa651", "#dd6a3a", "#b3332b", "#6a1424"];
 const LABELS = ["under 1%", "1–2%", "2–5%", "5–10%", "10–20%", "20–35%", "35% or more"];
-const bin = v => { let i = 0; while (i + 1 < BINS.length && v >= BINS[i + 1]) i++; return i; };
+// Danger rating change layers: chance tomorrow's rating is higher (warm) or lower (cool) than today's
+const CHANGE_BINS = [0, 0.05, 0.10, 0.20, 0.30, 0.50];
+const UP_COLORS = ["#e3ebf0", "#f2d68f", "#efa651", "#dd6a3a", "#b3332b", "#6a1424"];
+const DOWN_COLORS = ["#e3ebf0", "#c6dbef", "#9ecae1", "#6baed6", "#3182bd", "#08519c"];
+const CHANGE_LABELS = ["under 5%", "5–10%", "10–20%", "20–30%", "30–50%", "50% or more"];
+const NO_DATA = "#9aa5ad";
+const BAND_NAMES = { atl: "Above treeline", ntl: "Near treeline", btl: "Below treeline" };
+const LEVEL_NAMES = ["", "Low", "Moderate", "Considerable", "High", "Extreme"];
+const binIn = (bins, v) => { let i = 0; while (i + 1 < bins.length && v >= bins[i + 1]) i++; return i; };
+const bin = v => binIn(BINS, v);
 const pct = v => v == null ? "n/a" : v < 0.001 ? "<0.1%" : (v * 100).toFixed(v < 0.1 ? 1 : 0) + "%";
 const cm = v => v == null ? "n/a" : Math.round(v * 100) + " cm";
-let view = "p", selected = null;
+const level = v => v == null ? "–" : LEVEL_NAMES[Math.round(v)] || "–";
+let view = "p", band = "atl", selected = null;
+const isChange = () => view === "up" || view === "down";
+const value = props => isChange() ? props[`${band}_${view[0]}`] : props[view];
+const color = v => v == null ? NO_DATA
+  : !isChange() ? COLORS[bin(v)]
+  : (view === "up" ? UP_COLORS : DOWN_COLORS)[binIn(CHANGE_BINS, v)];
 
 const streets = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom: 17, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' });
@@ -135,8 +181,7 @@ const satellite = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/servi
 const map = L.map("map", { layers: [streets], zoomSnap: 0.25 });
 L.control.layers({ "Street map": streets, "Satellite": satellite }).addTo(map);
 
-const style = f => ({ fillColor: f.properties[view] == null ? "#9aa5ad" : COLORS[bin(f.properties[view])],
-  fillOpacity: 0.6, color: "#33414c", weight: 0.8 });
+const style = f => ({ fillColor: color(value(f.properties)), fillOpacity: 0.6, color: "#33414c", weight: 0.8 });
 const layers = new Map();
 const geo = L.geoJSON(DATA, {
   style,
@@ -167,17 +212,43 @@ function select(id) {
       <dt>Modeled snow depth</dt><dd>${cm(r.hs)}</dd>
       <dt>New snow, 72 h</dt><dd>${cm(r.hn72)}</dd>
       <dt>Danger rating model</dt><dd>${r.danger}</dd>
-    </dl>`;
+    </dl>
+    ${ratingTable(r)}`;
+}
+
+function ratingTable(r) {
+  const rated = Object.keys(BAND_NAMES).filter(b => r[`${b}_t`] != null);
+  if (!rated.length) return `<p class="hint" style="margin-top:12px">CAIC didn't rate this polygon today, so there is no rating change forecast.</p>`;
+  const rows = rated.map(b => `<tr><td>${BAND_NAMES[b]}</td><td>${level(r[`${b}_t`])}</td><td>${level(r[`${b}_o`])}</td>
+    <td class="num">${pct(r[`${b}_d`])}</td><td class="num">${pct(r[`${b}_s`])}</td><td class="num">${pct(r[`${b}_u`])}</td></tr>`).join("");
+  return `<table class="rc"><thead><tr><th>Band</th><th>Today</th><th>CAIC outlook</th><th class="num">Down</th><th class="num">Same</th><th class="num">Up</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function drawLegend() {
+  const [labels, colors] = isChange() ? [CHANGE_LABELS, view === "up" ? UP_COLORS : DOWN_COLORS] : [LABELS, COLORS];
+  const keys = labels.map((l, i) => `<span class="key"><i style="background:${colors[i]}"></i>${l}</span>`);
+  if (isChange()) keys.unshift(`<span class="key">${BAND_NAMES[band]}, chance the rating goes ${view}:</span>`);
+  keys.push(`<span class="key"><i style="background:${NO_DATA}"></i>${isChange() ? "not rated by CAIC" : "no data"}</span>`);
+  document.getElementById("legend").innerHTML = keys.join("");
+}
+
+function redraw() {
+  geo.setStyle(style);
+  drawLegend();
+  if (selected != null) select(selected);
 }
 
 document.querySelectorAll(".switch button").forEach(b => b.addEventListener("click", () => {
   view = b.dataset.view;
   document.querySelectorAll(".switch button").forEach(o => o.setAttribute("aria-pressed", String(o === b)));
-  geo.setStyle(style);
-  if (selected != null) select(selected);
+  redraw();
 }));
+document.getElementById("band").addEventListener("change", e => {
+  band = e.target.value;
+  if (isChange()) redraw();
+});
 
-document.getElementById("legend").innerHTML = LABELS.map((l, i) => `<span class="key"><i style="background:${COLORS[i]}"></i>${l}</span>`).join("");
+drawLegend();
 
 const ranked = DATA.features.map(f => f.properties).filter(r => r.p != null).sort((a, b) => b.p - a.p).slice(0, 10);
 document.getElementById("top").innerHTML = ranked.map(r =>

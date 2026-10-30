@@ -177,6 +177,16 @@ def predict_avalanche_hazards(prediction_date: Union[str, datetime]) -> None:
         except Exception as e:
             logging.error(f"Dry slab likelihood prediction failed; saving predictions without it: {e}", exc_info=True)
 
+        # Danger rating change from CAIC's current forecasts (AvID key in .env); a failure here shouldn't stop the output either
+        change_cols = []
+        try:
+            import hazard_change
+            change = hazard_change.predict(pd.Timestamp(prediction_date))
+            final_predictions_df = final_predictions_df.merge(change, on='polygon', how='left')
+            change_cols = hazard_change.output_columns()
+        except Exception as e:
+            logging.error(f"Danger rating change prediction failed; saving predictions without it: {e}", exc_info=True)
+
         # Save to standard CSV
         csv_output_path = config.PATHS["RESULTS"]["hazard_predictions_csv"]
         final_predictions_df.to_csv(csv_output_path, index=False)
@@ -196,7 +206,7 @@ def predict_avalanche_hazards(prediction_date: Union[str, datetime]) -> None:
         json_data_df.rename(columns=prob_rename_map, inplace=True)
         
         # Define the exact columns needed for the JSON output (model predictions only)
-        json_feature_cols = ['polygon', 'predicted_hazard', 'confidence', 'avalanche_event_propability'] + list(prob_rename_map.values()) + likelihood_cols
+        json_feature_cols = ['polygon', 'predicted_hazard', 'confidence', 'avalanche_event_propability'] + list(prob_rename_map.values()) + likelihood_cols + change_cols
 
         # Convert the relevant part of the DataFrame to a list of dictionaries (missing values as null)
         json_values = json_data_df[json_feature_cols].astype(object)

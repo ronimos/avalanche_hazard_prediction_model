@@ -47,6 +47,23 @@ logging.basicConfig(
 SRC_DIR = Path(__file__).parent
 ROOT_DIR = SRC_DIR.parent
 
+# --- LOCAL SETTINGS ---
+# KEY=VALUE lines from the project's .env (gitignored), such as the AvID API key.
+# Variables already set in the environment take precedence.
+def _load_dotenv(path: Path) -> None:
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip().removeprefix("export ").strip()
+        os.environ.setdefault(key, value.strip().strip('"').strip("'"))
+
+
+_load_dotenv(ROOT_DIR / ".env")
+
 # --- DYNAMIC DATA SOURCE CONFIGURATION ---
 # Check for the SNOWPACK_DATA_ROOT environment variable.
 # If it exists, use it as the base path for snowpack data.
@@ -93,6 +110,7 @@ PATHS = {
         "polygons": DATA_DIR / "raw" / "BC_Polygons.geojson",
         "snowpack_locations": DATA_DIR / "raw" / "SnowPackLocations.csv",
         "danger_ratings": DATA_DIR / "raw" / "danger_rating.csv",
+        "avid_ratings": DATA_DIR / "raw" / "danger_rating_avid.csv", # CAIC forecasts from AvID, all days of each forecast
         "avalanche_records": DATA_DIR / "raw" / "caic-avalanche-records-2026-10-28.csv",
     },
 
@@ -114,6 +132,7 @@ PATHS = {
         "training_features": DATA_DIR / "processed" / "training_features.csv",
         "training_targets": DATA_DIR / "processed" / "training_targets.csv",
         "inference_features": DATA_DIR / "processed" / "inference_features.csv",
+        "caic_ratings_history": DATA_DIR / "processed" / "caic_ratings_history.csv", # Ratings fetched by daily runs
     },
     
     # --- Model & Analysis Artifacts ---
@@ -125,6 +144,7 @@ PATHS = {
         "hazard_scaler": ARTIFACTS_DIR / "hazard_scaler.joblib",
         "hazard_calibrators": ARTIFACTS_DIR / "hazard_calibrators.joblib",
         "likelihood_model": ARTIFACTS_DIR / "likelihood_model.joblib",
+        "hazard_change_model": ARTIFACTS_DIR / "hazard_change_model.joblib",
         
         # --- Feature Lists & Params ---
         "event_final_features": ARTIFACTS_DIR / "event_final_features.json",
@@ -180,6 +200,14 @@ API_CONFIG = {
     "page_size": 100,
     "max_retries": 3,
     "retry_delay_sec": 2
+}
+
+# CAIC forecasts (AvID API), for the current danger ratings; the URL and key come from .env
+AVID_CONFIG = {
+    "base_url": os.getenv("AVID_API_BASE"),
+    "api_key": os.getenv("AVID_API_KEY") or os.getenv("API_KEY"),
+    "product_type": "avalancheforecast",
+    "timeout_sec": 30,
 }
 
 # --- DATA PROCESSING CONFIGURATION ---

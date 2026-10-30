@@ -32,3 +32,10 @@ def fixture_station():
 def fixture_polygon():
     """A polygon whose centroid sits next to the fixture station."""
     return {"polygon": 1, "centroid_lat": 40.745, "centroid_lon": -107.056}
+
+
+@pytest.fixture(autouse=True)
+def fresh_forecast_tables():
+    """Clears the run-level cache of forecast tables, so each test builds its own."""
+    import likelihood_forecast
+    likelihood_forecast._FORECAST_TABLES.clear()
