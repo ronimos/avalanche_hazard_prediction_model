@@ -40,7 +40,6 @@ from typing import Union
 
 # Import project-wide configurations
 import config
-import likelihood_forecast
 
 # --- Setup Logging ---
 logging.basicConfig(
@@ -168,9 +167,10 @@ def predict_avalanche_hazards(prediction_date: Union[str, datetime]) -> None:
             class_label_1 = class_label_0 + 1
             final_predictions_df[f'hazard_{class_label_1}_prob_calibrated'] = final_calibrated_probs[:, i]
 
-        # Dry slab likelihood; a failure here shouldn't stop the hazard output
+        # Dry slab likelihood; a failure here (including a missing dependency) shouldn't stop the hazard output
         likelihood_cols = []
         try:
+            import likelihood_forecast
             likelihood = likelihood_forecast.predict(pd.Timestamp(prediction_date))
             final_predictions_df = final_predictions_df.merge(likelihood, on='polygon', how='left')
             likelihood_cols = list(likelihood_forecast.OUTPUT_COLUMNS.values())
