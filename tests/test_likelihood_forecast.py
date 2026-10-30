@@ -23,8 +23,8 @@ class FixedModel:
 
     def predict_interval(self, df, quantiles):
         n = len(df)
-        return pd.DataFrame({"p_record": np.full(n, 0.05), "p_record_q10": np.full(n, 0.02),
-                             "p_record_q90": np.full(n, 0.09), "p_occurrence": np.full(n, 0.3)}, index=df.index)
+        return pd.DataFrame({"p_record": np.full(n, 0.05), "p_occurrence": np.full(n, 0.3),
+                             "p_occurrence_q10": np.full(n, 0.1), "p_occurrence_q90": np.full(n, 0.6)}, index=df.index)
 
 
 def test_season_of_uses_water_year():
@@ -43,7 +43,7 @@ def test_forecast_table_skips_the_runs_unfinished_last_day(monkeypatch):
     assert table["y"].item() == 0
 
 
-def test_predict_returns_record_probability_and_interval(monkeypatch, tmp_path):
+def test_predict_returns_occurrence_probability_interval_and_record_probability(monkeypatch, tmp_path):
     path = tmp_path / "likelihood_model.joblib"
     joblib.dump(FixedModel(), path)
     monkeypatch.setitem(config.PATHS["ARTIFACTS"], "likelihood_model", path)
@@ -55,3 +55,5 @@ def test_predict_returns_record_probability_and_interval(monkeypatch, tmp_path):
     assert out["polygon"].tolist() == [1, 2]
     assert (out["dry_slab_probability_q10"] < out["dry_slab_probability"]).all()
     assert (out["dry_slab_probability"] < out["dry_slab_probability_q90"]).all()
+    # Occurrence, not the lower probability that an avalanche is also recorded
+    assert (out["dry_slab_record_probability"] < out["dry_slab_probability"]).all()

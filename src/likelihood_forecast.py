@@ -12,10 +12,13 @@ confirmed live source of avalanche records, and at the operational lag of 2
 days it added little on held-out seasons. The model is refit once before each
 season on all past seasons; mid-season retraining didn't help.
 
-For each polygon it gives the probability that a D2+ dry slab avalanche is
-recorded (posterior mean) and the 10% and 90% posterior quantiles. The
-occurrence probability rests on the detection prior and isn't calibrated, so
-it isn't reported.
+For each polygon it gives the probability that a D2+ dry slab avalanche
+occurs, whether or not anyone reports it (posterior mean, with the 10% and 90%
+posterior quantiles). Its level rests on the detection prior (about 20% of
+avalanches reported): the records alone can't tell many poorly reported
+avalanches from few well reported ones, so the interval includes that
+uncertainty. The probability that one is recorded is also given, since it is
+the part that can be checked against the records.
 
 Drivers for the forecast day come from the current season's SNOWPACK run
 (SNOWPACK_DATA_ROOT). The run ends partway through its last day, so a day is
@@ -44,9 +47,10 @@ TRAIN_TUNE = 2000
 
 # Posterior summary -> output column
 OUTPUT_COLUMNS = {
-    "p_record": "dry_slab_probability",
-    "p_record_q10": "dry_slab_probability_q10",
-    "p_record_q90": "dry_slab_probability_q90",
+    "p_occurrence": "dry_slab_probability",
+    "p_occurrence_q10": "dry_slab_probability_q10",
+    "p_occurrence_q90": "dry_slab_probability_q90",
+    "p_record": "dry_slab_record_probability",
 }
 
 
@@ -89,7 +93,7 @@ def forecast_table(date: pd.Timestamp) -> pd.DataFrame:
 
 def predict(date: pd.Timestamp) -> pd.DataFrame:
     """
-    Dry slab likelihood and its 80% interval for every polygon on one day.
+    Dry slab occurrence probability, its 80% interval and the record probability for every polygon on one day.
 
     Args:
         date (pd.Timestamp): Forecast day (local date).

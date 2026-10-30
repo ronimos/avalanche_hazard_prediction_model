@@ -1,110 +1,96 @@
 # Machine Learning Pipeline for Avalanche Hazard Forecasting
 ## 1. Overview
-This project provides a complete, end-to-end machine learning pipeline for forecasting daily avalanche hazard levels in data-sparse regions. The core challenge in avalanche forecasting is the lack of complete data; while avalanche occurrences are reliably recorded (positive labels), the absence of a report does not guarantee safety (unlabeled data). This pipeline is specifically designed to address this Positive-Unlabeled (PU) learning problem.
+This project forecasts daily avalanche conditions for the 147 Colorado backcountry forecast polygons from simulated snowpack data (SNOWPACK driven by numerical weather predictions), so it doesn't depend on local field observations. Each daily run produces, for every polygon:
 
-The system uses simulated snowpack data from the SNOWPACK model and numerical weather predictions as its primary inputs, removing the dependency on direct, localized field observations. It employs a two-stage modeling process to first predict the likelihood of an avalanche event and then uses that information to forecast a final, multi-level hazard rating.
+- **Dry slab likelihood:** the probability that a D2 or larger dry slab avalanche occurs, whether or not it is reported, with an 80% interval. This comes from the new likelihood model (section 3).
+- **Danger rating:** a predicted rating (Low to High) with a confidence score, from the original two-stage pipeline (section 4).
 
-The final output is a daily, spatially continuous map of avalanche hazard predictions, complete with confidence scores to aid human forecasters in their decision-making process.
+The core difficulty is incomplete data (a positive-unlabeled problem). A recorded avalanche confirms that one happened, but no record doesn't mean none occurred. The likelihood model handles this by modeling occurrence and reporting separately, and reports the probability of occurrence. Its level rests on an assumed reporting rate (a prior of about 20% of D2+ avalanches reported), which the records alone can't pin down; the 80% interval includes that uncertainty.
 
-## 2. Key Features
-- **Two-Stage Modeling Pipeline:**
+The output is a CSV, a JSON file and an interactive map for the forecasters.
 
-    1. **Avalanche Event Model:** A Positive-Unlabeled (PU) learning model (`RandomForestClassifier`) using a custom Spy+Bootstrap algorithm to predict the probability of an avalanche event.
+## 2. Status
+The likelihood model is being rebuilt on the `dev` branch; the methods, results and open questions are in [`docs/methods.md`](docs/methods.md).
 
-    2. **Avalanche Hazard Model:** A multi-class classifier (`LGBMClassifier`) that uses the output from the event model as a key feature to predict the final hazard rating (Low, Moderate, Considerable, High).
+- The original event model (positive-unlabeled `RandomForestClassifier`) showed no skill on held-out seasons: AUC 0.48 and 0.55, against 0.90 on a random split. It is replaced by the dry slab likelihood model in the output.
+- The danger rating model still uses the original event score as an input. Rebuilding it is deferred.
+- Wet avalanches are outside the scope of the likelihood model.
 
-- **Data-Driven:** Relies on simulated SNOWPACK data and weather models, making it applicable to regions without extensive manual observations.
+## 3. Dry Slab Likelihood Model
+A Bayesian hierarchical occupancy-detection model (`bayes_model.py`, PyMC with the NumPyro sampler):
 
-- **Automated Workflow:** The entire process, from data fetching and feature engineering to model training and prediction, is orchestrated by a single command.
+- **Occurrence** depends on daily snowpack drivers from the SNOWPACK `.smet` output (new snow, SWE gain, wind, air temperature, rain, liquid water, natural and skier stability and their depths, snow depth), a smooth seasonal curve, and a regional storm-day effect.
+- **Reporting** depends on the polygon (pooled within its forecast region), the season and weekends or holidays.
+- On held-out seasons (2023-24 to 2025-26) it ranks days within a polygon with AUC 0.82 / 0.82 / 0.89, against 0.74 / 0.73 / 0.84 for a seasonal-curve baseline.
+- It is refit once before each season on all past seasons. Mid-season retraining didn't help.
+- Recent recorded activity is not used in operation, because no live source of avalanche records is confirmed and it added little at the operational 2-day lag.
 
-- **Model Interpretability:** Uses **SHAP (SHapley Additive exPlanations)** to provide insights into which features are driving the model's predictions.
+Scripts (in `src/`):
 
-- **Probabilistic Output:** Provides not just a hazard rating, but also a **confidence** score representing the model's certainty in its prediction.
+| Script | Purpose |
+| --- | --- |
+| `avalanche_observations.py` | Cleans the CAIC avalanche records export and assigns records to polygons |
+| `snowpack_drivers.py` | Builds daily drivers per polygon from SNOWPACK `.smet` files (read with xsnow) |
+| `likelihood_data.py` | Joins drivers and records into the polygon-day modeling table |
+| `evaluation.py` | Leave-one-season-out evaluation with a block bootstrap |
+| `uncertainty.py`, `retraining.py` | Prediction intervals, predictive checks, retraining backtest |
+| `likelihood_forecast.py` | Trains the operational model and predicts one day |
 
-- **Visualization:** Automatically generates daily interactive forecast maps showing hazard levels, event likelihood, and model confidence.
+## 4. Danger Rating Pipeline
+The original two-stage pipeline, orchestrated by `run_pipeline.py`:
 
-## 3. Pipeline Workflow
-The pipeline is executed by the `run_pipeline.py` script, which orchestrates the following steps in sequence:
+1. **Generate training data** (`make_avalanche_event_training_dataset.py`): reads SNOWPACK `.pro` files with `snowpack_reader.py` and computes features, including 3 to 9-day statistics.
+2. **Train event model** (`train_avalanche_event_model.py`): positive-unlabeled `RandomForestClassifier` with a Spy+Bootstrap algorithm. Its score is an input to the next stage.
+3. **Train hazard model** (`train_avalanche_hazard_model.py`): `LGBMClassifier` tuned with `GridSearchCV`, with isotonic calibration.
+4. **Generate prediction data** (`make_prediction_dataset.py`): features for the target date.
+5. **Predict** (`predict.py`, `run_prediction.py`): runs both stages, adds the dry slab likelihood, and optionally draws the map (`plot_results.py`). SHAP values explain the hazard model's predictions.
 
-1. **Generate Training Data** (`make_avalanche_event_training_dataset.py`):
+## 5. Installation
+Requires Python 3.12 and [uv](https://docs.astral.sh/uv/). Dependencies, including xsnow (installed from GitLab at a pinned commit), PyMC and NumPyro, are locked in `uv.lock`.
 
-    - Reads raw SNOWPACK `.pro` files using the hardware-adaptive `snowpack_reader.py`.
-
-    - Calculates hundreds of features, including temporal statistics (3 to 9-day means/standard deviations) for snowpack and weather variables.
-
-    - Creates the master feature and target datasets.
-
-2. **Train Event Model (**`train_avalanche_event_model.py`**):**
-
-    - Trains the PU learning model to distinguish between days with known avalanches and unlabeled days.
-
-    - Saves the trained model, scaler, and a file of its predictions on the historical data, which will be used as a feature in the next stage.
-
-3. **Train Hazard Model (**`train_avalanche_hazard_model.py`**):**
-
-    - Trains the multi-class `LGBMClassifier`.
-
-    - Performs hyperparameter tuning using `GridSearchCV`.
-
-    - Saves the final model, scaler, and calibrators.
-
-4. **Generate Prediction Data (**`make_prediction_dataset.py`**):**
-
-    - Prepares the feature set for a specific target date (e.g., tomorrow) required for inference.
-
-5. **Generate Daily Predictions (**`predict.py` **&** `run_prediction.py`**):**
-
-    - Loads all trained artifacts (models, scalers, calibrators).
-
-    - Runs the two-stage inference process to generate the final hazard rating and confidence score for the target date.
-
-    - Optionally generates a daily forecast map (`plot_results.py`).
-
-## 4. Installation
-1. **Clone the repository:**
-``` Bash
+```Bash
 git clone https://github.com/ronimos/avalanche_hazard_prediction_model.git
 cd avalanche_hazard_prediction_model
+uv sync --locked --extra dev --python /usr/bin/python3.12
 ```
 
-2. **Create and activate a virtual environment:**
-```Bash
-python -m venv .venv
-source .venv/bin/activate  # On Windows, use `.venv\Scripts\activate`
-```
+Use the same lock in every environment. The saved models are pickled, so a model trained under one version of pandas or scikit-learn may not load under another.
 
-3. **Install the required packages:**
+## 6. Usage
+Set `SNOWPACK_DATA_ROOT` to the SNOWPACK output folder (e.g. `/ssd/snowpack/fcst`). Otherwise the scripts read `data/external/snowpack`. **With `SNOWPACK_DATA_ROOT` set, the JSON output is written to the live web folder** (`config.PATHS["ARTIFACTS"]["all_predictions"]`), so test runs outside production should redirect it.
 
-The project uses a `pyproject.toml` file to manage dependencies. To install the core requirements, run:
-```Bash
-pip install .
-```
-To install optional dependencies for development, visualization, or GPU support, you can specify them in brackets. For example, to install everything needed for development and visualization:
-```Bash
-pip install .[dev,visualization]
-```
-## 5. Usage
-**To Run the Full Training Pipeline and Generate a Forecast**
-Execute the main orchestration script. You can specify a date for the forecast; otherwise, it will default to the current date.
-
-```Bash
-python src/run_pipeline.py --date YYYY-MM-DD
-```
-
-*Example:*
-```Bash
-python src/run_pipeline.py --date 2024-01-14
-```
-
-**To Generate a Forecast for a New Date (after models are trained)**
-Execute the prediction script. Use the `--plot` flag to generate the interactive map.
+**Daily forecast** (after the models are trained). Predicts the given date. The production run (`src/run_predictions.sh`) forecasts tomorrow:
 ```Bash
 python src/run_prediction.py --date YYYY-MM-DD --plot
 ```
+Predictions go to `results/final_hazard_predictions.csv` and the JSON file. The map is saved as `results/prediction_map_YYYY-MM-DD.html`. The Dry Slab Likelihood layer is on by default; its 80% range is in the tooltip and in two optional layers.
 
-*Example:*
+Output fields:
+
+| Field | Meaning |
+| --- | --- |
+| `dry_slab_probability` | Probability that a D2+ dry slab avalanche occurs in the polygon, reported or not |
+| `dry_slab_probability_q10`, `dry_slab_probability_q90` | 80% interval of that probability |
+| `dry_slab_record_probability` | Probability that one occurs and is recorded; the part that can be checked against records |
+| `predicted_hazard`, `confidence` | Danger rating (1 to 4) and its calibrated probability |
+| `calibrated_proba_hazard_1` .. `_4` | Calibrated probability of each rating |
+| `avalanche_event_propability` | Original event score (input to the danger rating) |
+
+If the likelihood step fails, the other fields are still written.
+
+**Train the likelihood model** (once before each season, about 20 minutes):
 ```Bash
-python src/run_prediction.py --date 2024-01-15 --plot
+python src/avalanche_observations.py     # needs the CAIC export in data/raw
+python src/snowpack_drivers.py           # about 6 minutes
+python src/likelihood_forecast.py --train
 ```
 
-The final predictions will be saved as a CSV file in the `results/` directory, and the map will be saved as an HTML file in the same location.
+**Evaluate models on held-out seasons:**
+```Bash
+python src/evaluation.py --models climatology driver_logistic bayes --reference driver_logistic
+```
+
+**Retrain the danger rating pipeline:**
+```Bash
+python src/run_pipeline.py --date YYYY-MM-DD
+```

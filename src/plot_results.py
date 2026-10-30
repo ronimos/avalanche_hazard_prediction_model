@@ -23,8 +23,8 @@ import numpy as np
 # Import project-wide configurations for consistent path management
 import config
 
-# Dry slab probabilities above this get the top color; most polygon-days are a few percent
-DRY_SLAB_COLOR_MAX = 0.1
+# Occurrence probabilities above this get the top color (about the 95th percentile of winter polygon-days)
+DRY_SLAB_COLOR_MAX = 0.5
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -135,12 +135,14 @@ def create_prediction_map(prediction_date: Union[str, datetime]):
     ).add_to(m)
 
     # --- Define Colormaps ---
-    likelihood_colormap = cm.LinearColormap(
-        colors=['#3b82f6', '#facc15', '#ef4444', '#000000'],
-        vmin=0, vmax=1,
-        caption='Event Likelihood Score'
-    )
-    m.add_child(likelihood_colormap)
+    has_dry_slab = 'dry_slab_probability' in merged_gdf.columns
+    if has_dry_slab:
+        dry_slab_colormap = cm.LinearColormap(
+            colors=['#3b82f6', '#facc15', '#ef4444', '#000000'],
+            vmin=0, vmax=DRY_SLAB_COLOR_MAX,
+            caption=f'Probability of a D2+ Dry Slab Avalanche (reported or not; capped at {DRY_SLAB_COLOR_MAX:.0%})'
+        )
+        m.add_child(dry_slab_colormap)
 
     # --- Create Data Layers ---
     hazard_colors = {
@@ -170,23 +172,34 @@ def create_prediction_map(prediction_date: Union[str, datetime]):
     ).add_to(outline_layer)
     outline_layer.add_to(m)
 
-    # 2. Event Likelihood Score Layer
-    likelihood_layer = folium.FeatureGroup(name='Event Likelihood Score', show=True)
-    folium.GeoJson(
-        merged_gdf,
-        style_function=lambda feature: {
-            'fillColor': likelihood_colormap(feature['properties']['confidence']),
-            'color': 'black',
-            'weight': 1,
-            'fillOpacity': 0.5
-        },
-        tooltip=folium.GeoJsonTooltip(
-            fields=['polygon_number', 'confidence_str'],
-            aliases=['Region:', 'Likelihood Score:'],
-            localize=True
-        )
-    ).add_to(likelihood_layer)
-    likelihood_layer.add_to(m)
+    # 2. Dry Slab Likelihood Layers: the probability that a D2+ dry slab avalanche occurs (reported or not),
+    # and the low and high ends of its 80% interval
+    if has_dry_slab:
+        merged_gdf['dry_slab_str'] = merged_gdf['dry_slab_probability'].map(
+            lambda p: f"{p:.1%}" if pd.notna(p) else 'No data')
+        merged_gdf['dry_slab_range_str'] = merged_gdf.apply(
+            lambda r: f"{r['dry_slab_probability_q10']:.1%} to {r['dry_slab_probability_q90']:.1%}"
+            if pd.notna(r['dry_slab_probability']) else 'No data', axis=1)
+        for column, name, show in [('dry_slab_probability', 'Dry Slab Likelihood', True),
+                                   ('dry_slab_probability_q10', 'Dry Slab Likelihood, Low End of 80% Range', False),
+                                   ('dry_slab_probability_q90', 'Dry Slab Likelihood, High End of 80% Range', False)]:
+            layer = folium.FeatureGroup(name=name, show=show)
+            folium.GeoJson(
+                merged_gdf,
+                style_function=lambda feature, column=column: {
+                    'fillColor': dry_slab_colormap(min(feature['properties'][column], DRY_SLAB_COLOR_MAX))
+                    if feature['properties'][column] is not None else '#e5e7eb',
+                    'color': 'black',
+                    'weight': 1,
+                    'fillOpacity': 0.5
+                },
+                tooltip=folium.GeoJsonTooltip(
+                    fields=['polygon_number', 'dry_slab_str', 'dry_slab_range_str'],
+                    aliases=['Region:', 'D2+ Dry Slab Probability:', '80% Range:'],
+                    localize=True
+                )
+            ).add_to(layer)
+            layer.add_to(m)
 
     # 3. Hazard Rating Prediction Layer (Standard)
     hazard_layer = folium.FeatureGroup(name='Hazard Rating Prediction', show=True)
@@ -206,36 +219,7 @@ def create_prediction_map(prediction_date: Union[str, datetime]):
     ).add_to(hazard_layer)
     hazard_layer.add_to(m)
 
-    # 4. Dry Slab Likelihood Layer (probability of a recorded D2+ dry slab avalanche)
-    if 'dry_slab_probability' in merged_gdf.columns:
-        dry_slab_colormap = cm.LinearColormap(
-            colors=['#3b82f6', '#facc15', '#ef4444', '#000000'],
-            vmin=0, vmax=DRY_SLAB_COLOR_MAX,
-            caption=f'Dry Slab Likelihood (D2+, capped at {DRY_SLAB_COLOR_MAX:.0%})'
-        )
-        m.add_child(dry_slab_colormap)
-        merged_gdf['dry_slab_str'] = merged_gdf.apply(
-            lambda r: f"{r['dry_slab_probability']:.1%} (80%: {r['dry_slab_probability_q10']:.1%} to {r['dry_slab_probability_q90']:.1%})"
-            if pd.notna(r['dry_slab_probability']) else 'No data', axis=1)
-        dry_slab_layer = folium.FeatureGroup(name='Dry Slab Likelihood', show=False)
-        folium.GeoJson(
-            merged_gdf,
-            style_function=lambda feature: {
-                'fillColor': dry_slab_colormap(min(feature['properties']['dry_slab_probability'], DRY_SLAB_COLOR_MAX))
-                if feature['properties']['dry_slab_probability'] is not None else '#e5e7eb',
-                'color': 'black',
-                'weight': 1,
-                'fillOpacity': 0.6
-            },
-            tooltip=folium.GeoJsonTooltip(
-                fields=['polygon_number', 'dry_slab_str'],
-                aliases=['Region:', 'Dry Slab Likelihood:'],
-                localize=True
-            )
-        ).add_to(dry_slab_layer)
-        dry_slab_layer.add_to(m)
-
-    # 5. NEW: Hazard Rating Prediction Layer (Confidence as Opacity)
+    # 4. NEW: Hazard Rating Prediction Layer (Confidence as Opacity)
     hazard_confidence_layer = folium.FeatureGroup(name='Hazard Rating (by Confidence)', show=False)
     folium.GeoJson(
         merged_gdf,

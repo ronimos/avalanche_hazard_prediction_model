@@ -10,7 +10,7 @@ authors = [
 ]
 description = "A comprehensive pipeline for avalanche hazard forecasting using machine learning."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = { file="LICENSE" }
 keywords = ["avalanche", "forecasting", "machine learning", "snowpack", "geospatial"]
 classifiers = [
