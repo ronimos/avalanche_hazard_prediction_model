@@ -53,6 +53,9 @@ OUTPUT_COLUMNS = {
     "p_record": "dry_slab_record_probability",
 }
 
+# Snowpack context for the map (CSV only), driver -> output column
+SNOW_COLUMNS = {"HS_mod": "snow_depth_m", "HN72": "new_snow_72h_m"}
+
 
 def season_of(date: pd.Timestamp) -> int:
     """Water year (Oct-Sep) of a date, labeled by its starting year."""
@@ -99,7 +102,7 @@ def predict(date: pd.Timestamp) -> pd.DataFrame:
         date (pd.Timestamp): Forecast day (local date).
 
     Returns:
-        pd.DataFrame: 'polygon' plus the OUTPUT_COLUMNS.
+        pd.DataFrame: 'polygon' plus the OUTPUT_COLUMNS and SNOW_COLUMNS.
     """
     model = joblib.load(config.PATHS["ARTIFACTS"]["likelihood_model"])
     if date.month not in ld.SEASON_MONTHS:
@@ -109,9 +112,10 @@ def predict(date: pd.Timestamp) -> pd.DataFrame:
     if missing:
         logging.warning(f"No complete drivers for {date.date()} in {len(missing)} polygons: {missing}")
     if table.empty:
-        return pd.DataFrame(columns=["polygon", *OUTPUT_COLUMNS.values()])
+        return pd.DataFrame(columns=["polygon", *OUTPUT_COLUMNS.values(), *SNOW_COLUMNS.values()])
     summary = model.predict_interval(table, quantiles=(0.1, 0.9))
-    return pd.concat([table[["polygon"]], summary[list(OUTPUT_COLUMNS)].rename(columns=OUTPUT_COLUMNS)], axis=1)
+    return pd.concat([table[["polygon"]], summary[list(OUTPUT_COLUMNS)].rename(columns=OUTPUT_COLUMNS),
+                      table[list(SNOW_COLUMNS)].rename(columns=SNOW_COLUMNS)], axis=1)
 
 
 def main() -> None:

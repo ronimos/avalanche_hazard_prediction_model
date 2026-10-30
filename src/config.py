@@ -170,6 +170,9 @@ PATHS = {
 }   
 
 
+# What the dry slab probability means and its limitations, linked from the maps
+METHODS_DOC_URL = "https://github.com/ronimos/avalanche_hazard_prediction_model/blob/main/docs/methods.md#what-the-probability-means"
+
 # --- API CONFIGURATION ---
 API_CONFIG = {
     "base_url": "https://lb-octonaut.avalanche.dev/api/v2/avalanche_observations",

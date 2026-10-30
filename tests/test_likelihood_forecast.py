@@ -51,7 +51,7 @@ def test_predict_returns_occurrence_probability_interval_and_record_probability(
 
     out = lf.predict(pd.Timestamp("2026-12-15"))
 
-    assert list(out.columns) == ["polygon", *lf.OUTPUT_COLUMNS.values()]
+    assert list(out.columns) == ["polygon", *lf.OUTPUT_COLUMNS.values(), *lf.SNOW_COLUMNS.values()]
     assert out["polygon"].tolist() == [1, 2]
     assert (out["dry_slab_probability_q10"] < out["dry_slab_probability"]).all()
     assert (out["dry_slab_probability"] < out["dry_slab_probability_q90"]).all()

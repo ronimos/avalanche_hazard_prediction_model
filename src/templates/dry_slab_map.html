@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dry Slab Occurrence Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=Source+Sans+3:wght@400;600&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+/* Layout: forecast header, then map + polygon detail side by side (stacked on phones), then ranked table and notes */
+:root {
+  --bg: #f2f5f7; --panel: #ffffff; --fg: #16212a; --muted: #576874; --line: #cbd5dc; --edge: #7d8e9a; --accent: #1f5f8b; --focus: #1f5f8b;
+  --b0: #e3ebf0; --b1: #bdd3e1; --b2: #f2d68f; --b3: #efa651; --b4: #dd6a3a; --b5: #b3332b; --b6: #6a1424;
+  --display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root {
+  --bg: #0f161c; --panel: #162028; --fg: #e3eaef; --muted: #95a5b0; --line: #2a3742; --edge: #50616d; --accent: #7fb6dc; --focus: #7fb6dc;
+  color-scheme: dark } }
+body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 20px 40px; }
+.wrap { max-width: 1180px; margin: 0 auto; display: grid; gap: 20px; }
+h1, h2 { font-family: var(--display); font-weight: 600; letter-spacing: 0.01em; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(1.8rem, 4vw, 2.4rem); line-height: 1.05; }
+h2 { font-size: 1.35rem; }
+.eyebrow { font-family: var(--display); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.85rem; color: var(--muted); }
+header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: end; justify-content: space-between; }
+header .meta { color: var(--muted); margin: 4px 0 0; }
+.switch { display: inline-flex; border: 1px solid var(--edge); border-radius: 6px; overflow: hidden; }
+.switch button { font: 600 0.95rem var(--display); letter-spacing: 0.03em; padding: 7px 12px; border: 0; background: transparent; color: var(--fg); cursor: pointer; }
+.switch button + button { border-left: 1px solid var(--edge); }
+.switch button[aria-pressed="true"] { background: var(--accent); color: var(--bg); }
+button:focus-visible, .row:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 20px; align-items: start; }
+@media (max-width: 820px) { .main { grid-template-columns: minmax(0, 1fr); } }
+.mapbox { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-width: 0; }
+#map { height: min(72vh, 760px); min-height: 420px; border-radius: 4px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; align-items: center; }
+.legend .key { display: inline-flex; gap: 6px; align-items: center; }
+.legend i { width: 18px; height: 12px; border-radius: 2px; border: 1px solid var(--edge); display: inline-block; }
+.detail { display: grid; gap: 14px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+.detail .name { font-family: var(--display); font-weight: 600; font-size: 1.4rem; line-height: 1.1; }
+.detail .region { color: var(--muted); font-size: 0.9rem; }
+.big { font-family: var(--display); font-weight: 600; font-size: 2.6rem; line-height: 1; font-variant-numeric: tabular-nums; margin-top: 10px; }
+.range { color: var(--muted); font-variant-numeric: tabular-nums; }
+.bar { position: relative; height: 10px; background: var(--line); border-radius: 5px; margin: 10px 0 2px; }
+.bar span { position: absolute; top: 0; bottom: 0; background: var(--b3); border-radius: 5px; }
+.bar b { position: absolute; top: -3px; width: 3px; height: 16px; background: var(--fg); border-radius: 1px; }
+.barscale { display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+dl { display: grid; grid-template-columns: auto auto; gap: 4px 12px; margin: 12px 0 0; font-variant-numeric: tabular-nums; }
+dt { color: var(--muted); } dd { margin: 0; text-align: right; }
+.hint { color: var(--muted); font-size: 0.9rem; margin: 0; }
+.lower { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 820px) { .lower { grid-template-columns: minmax(0, 1fr); } }
+.tablebox { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 0.92rem; }
+th { text-align: left; font: 600 0.8rem var(--display); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); border-bottom: 1px solid var(--line); padding: 6px 8px; }
+td { padding: 6px 8px; border-bottom: 1px solid var(--line); }
+td.num, th.num { text-align: right; }
+.row { cursor: pointer; } .row:hover { background: var(--bg); }
+.notes p { margin: 0 0 10px; max-width: 65ch; } .notes p:last-child { margin: 0; }
+.notes a { color: var(--accent); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <div class="eyebrow">Avalanche likelihood model</div>
+      <h1>D2+ Dry Slab Avalanche Probability</h1>
+      <p class="meta">Forecast for __DATE_LONG__ · generated __GENERATED__ · __N__ polygons</p>
+    </div>
+    <div class="switch" role="group" aria-label="Map shows">
+      <button id="v-p" data-view="p" aria-pressed="true">Most likely</button>
+      <button id="v-lo" data-view="lo" aria-pressed="false">Low end</button>
+      <button id="v-hi" data-view="hi" aria-pressed="false">High end</button>
+    </div>
+  </header>
+
+  <div class="main">
+    <div class="mapbox">
+      <div id="map" role="img" aria-label="Colorado forecast polygons colored by dry slab avalanche probability"></div>
+      <div class="legend" id="legend"></div>
+    </div>
+    <div class="detail">
+      <div class="card" id="detail" aria-live="polite"></div>
+      <p class="hint">Hover or tap a polygon. "Low end" and "High end" color the map by the 10% and 90% quantiles, the edges of the 80% range. Switch between the street map and satellite imagery with the layer button on the map.</p>
+    </div>
+  </div>
+
+  <div class="lower">
+    <div class="card tablebox">
+      <h2>Highest probabilities</h2>
+      <table>
+        <thead><tr><th>Polygon</th><th>Region</th><th class="num">Probability</th><th class="num">80% range</th><th class="num">Snow depth</th></tr></thead>
+        <tbody id="top"></tbody>
+      </table>
+    </div>
+    <div class="card notes">
+      <h2>Reading the numbers</h2>
+      <p>Each value is the probability of at least one D2 or larger dry slab avalanche in the polygon that day, natural or triggered, whether or not anyone reports it, at the activity and observation level of the most closely watched polygons. Wet avalanches are not included.</p>
+      <p>The model assumes every polygon produces avalanches at the same rate under the same snowpack. That holds best for natural avalanches; triggered ones also depend on traffic, which isn't measured. A quiet polygon's own number of avalanches may be lower than its value here. Rank days within a polygon with confidence; compare polygons with care.</p>
+      <p>The 80% range covers the model's statistical uncertainty, not that assumption.__SEASON_NOTE__</p>
+      <p><a href="__METHODS_URL__" target="_blank" rel="noopener">Methods: what the probability means and its limitations</a></p>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+const DATA = __DATA__;
+const BINS = [0, 0.01, 0.02, 0.05, 0.10, 0.20, 0.35];
+const COLORS = ["#e3ebf0", "#bdd3e1", "#f2d68f", "#efa651", "#dd6a3a", "#b3332b", "#6a1424"];
+const LABELS = ["under 1%", "1–2%", "2–5%", "5–10%", "10–20%", "20–35%", "35% or more"];
+const bin = v => { let i = 0; while (i + 1 < BINS.length && v >= BINS[i + 1]) i++; return i; };
+const pct = v => v == null ? "n/a" : v < 0.001 ? "<0.1%" : (v * 100).toFixed(v < 0.1 ? 1 : 0) + "%";
+const cm = v => v == null ? "n/a" : Math.round(v * 100) + " cm";
+let view = "p", selected = null;
+
+const streets = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 17, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' });
+const satellite = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+  maxZoom: 17, attribution: "Imagery &copy; Esri, Maxar, Earthstar Geographics" });
+const map = L.map("map", { layers: [streets], zoomSnap: 0.25 });
+L.control.layers({ "Street map": streets, "Satellite": satellite }).addTo(map);
+
+const style = f => ({ fillColor: f.properties[view] == null ? "#9aa5ad" : COLORS[bin(f.properties[view])],
+  fillOpacity: 0.6, color: "#33414c", weight: 0.8 });
+const layers = new Map();
+const geo = L.geoJSON(DATA, {
+  style,
+  onEachFeature: (f, layer) => {
+    layers.set(f.properties.id, layer);
+    layer.on({ mouseover: () => select(f.properties.id), click: () => select(f.properties.id) });
+  },
+}).addTo(map);
+map.fitBounds(geo.getBounds(), { padding: [8, 8] });
+
+function select(id) {
+  if (selected != null) geo.resetStyle(layers.get(selected));
+  selected = id;
+  const layer = layers.get(id), r = layer.feature.properties;
+  layer.setStyle({ weight: 3, color: "#111" });
+  layer.bringToFront();
+  const max = Math.max(0.2, Math.ceil((r.hi ?? 0) * 10) / 10);
+  const x = v => Math.min(100, ((v ?? 0) / max) * 100);
+  document.getElementById("detail").innerHTML = `
+    <div class="name">Polygon ${r.id}</div>
+    <div class="region">${[r.range, r.region].filter(Boolean).join(" · ")}</div>
+    <div class="big">${pct(r.p)}</div>
+    <div class="range">80% range ${pct(r.lo)} to ${pct(r.hi)}</div>
+    <div class="bar" aria-hidden="true"><span style="left:${x(r.lo)}%;width:${Math.max(0.8, x(r.hi) - x(r.lo))}%"></span><b style="left:calc(${x(r.p)}% - 1px)"></b></div>
+    <div class="barscale" aria-hidden="true"><span>0%</span><span>${Math.round(max * 100)}%</span></div>
+    <dl>
+      <dt>Probability one is also recorded</dt><dd>${pct(r.rec)}</dd>
+      <dt>Modeled snow depth</dt><dd>${cm(r.hs)}</dd>
+      <dt>New snow, 72 h</dt><dd>${cm(r.hn72)}</dd>
+      <dt>Danger rating model</dt><dd>${r.danger}</dd>
+    </dl>`;
+}
+
+document.querySelectorAll(".switch button").forEach(b => b.addEventListener("click", () => {
+  view = b.dataset.view;
+  document.querySelectorAll(".switch button").forEach(o => o.setAttribute("aria-pressed", String(o === b)));
+  geo.setStyle(style);
+  if (selected != null) select(selected);
+}));
+
+document.getElementById("legend").innerHTML = LABELS.map((l, i) => `<span class="key"><i style="background:${COLORS[i]}"></i>${l}</span>`).join("");
+
+const ranked = DATA.features.map(f => f.properties).filter(r => r.p != null).sort((a, b) => b.p - a.p).slice(0, 10);
+document.getElementById("top").innerHTML = ranked.map(r =>
+  `<tr class="row" tabindex="0" data-id="${r.id}"><td>${r.id}</td><td>${r.region}</td><td class="num">${pct(r.p)}</td><td class="num">${pct(r.lo)}–${pct(r.hi)}</td><td class="num">${cm(r.hs)}</td></tr>`).join("");
+document.querySelectorAll(".row").forEach(tr => {
+  const go = () => { const id = Number(tr.dataset.id); select(id); map.fitBounds(layers.get(id).getBounds(), { maxZoom: 10 }); };
+  tr.addEventListener("click", go);
+  tr.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+});
+
+if (ranked.length) select(ranked[0].id);
+})();
+</script>
+</body>
+</html>

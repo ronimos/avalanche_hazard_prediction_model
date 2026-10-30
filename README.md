@@ -64,7 +64,7 @@ Set `SNOWPACK_DATA_ROOT` to the SNOWPACK output folder (e.g. `/ssd/snowpack/fcst
 ```Bash
 python src/run_prediction.py --date YYYY-MM-DD --plot
 ```
-Predictions go to `results/final_hazard_predictions.csv` and the JSON file. The map is saved as `results/prediction_map_YYYY-MM-DD.html`. The Dry Slab Likelihood layer is on by default; its 80% range is in the tooltip and in two optional layers.
+Predictions go to `results/final_hazard_predictions.csv` (which also carries modeled snow depth and 72 h new snow) and the JSON file. Two maps are written to `results/`: `dry_slab_map_YYYY-MM-DD.html` (`dry_slab_map.py`), the published page, with the dry slab probability on a street map or satellite imagery, its 80% range, snowpack context and the danger rating; and the folium map `prediction_map_YYYY-MM-DD.html` (`plot_results.py`). `run_predictions.sh` copies the dry slab map to `next_day_prediction.html` on the web server, or the folium map if the dry slab map wasn't written.
 
 Output fields:
 

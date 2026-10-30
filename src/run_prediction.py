@@ -36,6 +36,7 @@ from datetime import datetime
 import make_prediction_dataset
 import predict
 import plot_results # Import the plotting script
+import dry_slab_map
 
 # --- Setup Logging ---
 logging.basicConfig(
@@ -100,6 +101,7 @@ def main():
         logging.info("STEP 3: Generating visualization map...")
         try:
             plot_results.create_prediction_map(prediction_date=run_date)
+            dry_slab_map.create_dry_slab_map(prediction_date=run_date)
             logging.info("...Map generation complete.")
         except Exception as e:
             logging.error(f"Failed during map generation: {e}", exc_info=True)
