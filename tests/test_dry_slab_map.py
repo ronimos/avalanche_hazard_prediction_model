@@ -34,12 +34,13 @@ def test_map_features_carry_values_and_leave_missing_polygons_empty():
 
 def test_map_features_carry_rating_change():
     predictions = _predictions().assign(atl_caic_today=3.0, atl_caic_outlook=4.0, atl_p_down=0.05,
-                                        atl_p_same=0.6, atl_p_up=0.35)
+                                        atl_p_same=0.6, atl_p_up=0.35, atl_drivers_p_up=0.5)
 
     first = dsm.map_features(_polygons(), predictions)["features"][0]["properties"]
 
     assert (first["atl_t"], first["atl_o"], first["atl_d"], first["atl_s"], first["atl_u"]) == (3, 4, 0.05, 0.6, 0.35)
-    assert first["ntl_u"] is None
+    assert first["atl_du"] == 0.5
+    assert first["ntl_u"] is None and first["atl_dd"] is None
 
 
 def test_render_fills_every_placeholder():

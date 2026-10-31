@@ -200,17 +200,88 @@ def test_forecast_inputs_use_ratings_before_the_forecast_day_only():
     assert np.isnan(rows["atl"].item())
 
 
+def _with_outlook(df, seed=1):
+    """Adds an outlook that calls 80% of the changes and is otherwise the rating for t-1."""
+    rng = np.random.default_rng(seed)
+    df = df.copy()
+    for band in hc.BANDS:
+        right = rng.random(len(df)) < 0.8
+        df[f"{band}_outlook"] = np.where(right, df[band], df[f"{band}_prev"])
+    return df
+
+
+def test_change_table_joins_outlooks():
+    ratings = _ratings(1, "2024-01-01", [2, 3])
+    outlooks = pd.DataFrame({"polygon": [1], "date": [pd.Timestamp("2024-01-02")], "atl": [4], "ntl": [3], "btl": [2]})
+
+    day = hc.build_change_table(_table(ratings), ratings, outlooks).set_index("date")
+
+    assert day.loc["2024-01-02", "atl_outlook"] == 4
+    assert np.isnan(day.loc["2024-01-01", "atl_outlook"])
+    # Without outlooks the columns are there but empty
+    assert hc.build_change_table(_table(ratings), ratings)["ntl_outlook"].isna().all()
+
+
+def test_outlook_model_uses_the_outlook():
+    df = hc.band_rows(_with_outlook(_synthetic()), "atl")
+    flat = np.tile([0.1, 0.8, 0.1], (len(df), 1))
+    train, test = df["season"] == 2023, df["season"] == 2024
+
+    proba = hc.OutlookModel("atl").fit(flat[train], df[train]).predict_proba(flat[test], df[test])
+
+    np.testing.assert_allclose(proba.sum(axis=1), 1)
+    up = df.loc[test, "atl_change"] == 1
+    assert roc_auc_score(up, proba[:, 2]) > 0.85
+    # From Low there is no decrease
+    assert (proba[df.loc[test, "atl_prev"].to_numpy() == 1, 0] == 0).all()
+
+
+def test_outlook_evaluation_holds_out_seasons_and_blocks(monkeypatch):
+    df = _with_outlook(_synthetic(seasons=(2023, 2024)))
+    df.loc[df["season"] == 2023, [f"{b}_outlook" for b in hc.BANDS]] = np.nan  # outlooks only in 2024
+    change_fits, outlook_fits = [], []
+    real_change_fit, real_outlook_fit = hc.ChangeModel.fit, hc.OutlookModel.fit
+
+    def change_fit(self, d):
+        change_fits.append(set(d["season"]))
+        return real_change_fit(self, d)
+
+    def outlook_fit(self, proba, d):
+        outlook_fits.append(set(d["date"]))
+        return real_outlook_fit(self, proba, d)
+
+    monkeypatch.setattr(hc.ChangeModel, "fit", change_fit)
+    monkeypatch.setattr(hc.OutlookModel, "fit", outlook_fit)
+
+    out = hc.evaluate_outlook(df, "atl")
+
+    # The change model for 2024 never sees 2024
+    assert change_fits == [{2023}]
+    assert set(out["model"]) == {"change_logistic", "outlook_only", "change_with_outlook"}
+    assert set(out["season"]) == {2024}
+    # Each outlook fit leaves out one 14-day block: 59 days with a rating for t-1 -> 5 blocks, 2 fits per block
+    assert len(outlook_fits) == 10
+    rows = hc.band_rows(df, "atl")
+    days = set(rows.loc[rows["season"] == 2024, "date"])
+    assert sorted(len(days - fit) for fit in outlook_fits) == [3, 3] + [14] * 8
+
+
 def test_predict_gives_probabilities_and_caic_ratings(tmp_path, monkeypatch):
-    df = _synthetic()
+    df = _with_outlook(_synthetic())
     models = {band: hc.ChangeModel(band).fit(hc.band_rows(df, band)) for band in hc.BANDS}
+    outlook_models = {}
+    for band in hc.BANDS:
+        rows = hc.band_rows(df, band)
+        # Flat probabilities stand in for held-out ones; in-sample ones are too good to leave room for the outlook
+        outlook_models[band] = hc.OutlookModel(band).fit(np.tile([0.1, 0.8, 0.1], (len(rows), 1)), rows)
     path = tmp_path / "hazard_change_model.joblib"
     import joblib
-    joblib.dump({"models": models, "seasons": [2023, 2024]}, path)
+    joblib.dump({"models": models, "outlook_models": outlook_models, "seasons": [2023, 2024]}, path)
     monkeypatch.setitem(hc.config.PATHS["ARTIFACTS"], "hazard_change_model", path)
     date = pd.Timestamp("2025-12-15")
     monkeypatch.setattr(hc.likelihood_forecast, "forecast_table",
                         lambda d: _table(pd.concat([_ratings(1, d, [0]), _ratings(2, d, [0])]), season=2025))
-    history = pd.concat([_history(1, {"2025-12-13": 2, "2025-12-14": 3}, outlook=("2025-12-15", 4)),
+    history = pd.concat([_history(1, {"2025-12-13": 2, "2025-12-14": 2}, outlook=("2025-12-15", 3)),
                          _history(2, {"2025-12-10": 2})])
 
     out = hc.predict(date, history=history)
@@ -218,9 +289,26 @@ def test_predict_gives_probabilities_and_caic_ratings(tmp_path, monkeypatch):
     # Polygon 2 wasn't rated yesterday, so it gets no forecast
     assert out["polygon"].tolist() == [1]
     assert list(out.columns) == ["polygon", *hc.output_columns()]
-    assert out["atl_caic_today"].item() == 3 and out["atl_caic_outlook"].item() == 4
-    total = out[[f"atl_p_{c}" for c in hc.CHANGE_NAMES]].sum(axis=1).item()
-    assert total == pytest.approx(1)
+    assert out["atl_caic_today"].item() == 2 and out["atl_caic_outlook"].item() == 3
+    for prefix in ["p", "drivers_p"]:
+        total = out[[f"atl_{prefix}_{c}" for c in hc.CHANGE_NAMES]].sum(axis=1).item()
+        assert total == pytest.approx(1)
+    # The outlook calls an increase, so the probability with it is higher
+    assert out["atl_p_up"].item() > out["atl_drivers_p_up"].item()
+
+
+def test_predict_with_an_old_artifact_gives_drivers_only(tmp_path, monkeypatch):
+    df = _synthetic()
+    models = {band: hc.ChangeModel(band).fit(hc.band_rows(df, band)) for band in hc.BANDS}
+    path = tmp_path / "hazard_change_model.joblib"
+    import joblib
+    joblib.dump({"models": models, "seasons": [2023, 2024]}, path)
+    monkeypatch.setitem(hc.config.PATHS["ARTIFACTS"], "hazard_change_model", path)
+    monkeypatch.setattr(hc.likelihood_forecast, "forecast_table", lambda d: _table(_ratings(1, d, [0]), season=2025))
+
+    out = hc.predict(pd.Timestamp("2025-12-15"), history=_history(1, {"2025-12-14": 3}))
+
+    assert np.isnan(out["atl_p_up"].item()) and out["atl_drivers_p_up"].notna().item()
 
 
 def test_predict_without_ratings_returns_empty_columns(tmp_path, monkeypatch):

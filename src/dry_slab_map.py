@@ -36,7 +36,8 @@ SIMPLIFY_TOLERANCE = 0.002
 DANGER_LEVELS = {1: "Low", 2: "Moderate", 3: "Considerable", 4: "High"}
 BANDS = ["atl", "ntl", "btl"]
 # Rating change output column suffix -> property suffix on the page
-CHANGE_FIELDS = {"caic_today": "t", "caic_outlook": "o", "p_down": "d", "p_same": "s", "p_up": "u"}
+CHANGE_FIELDS = {"caic_today": "t", "caic_outlook": "o", "p_down": "d", "p_same": "s", "p_up": "u",
+                 "drivers_p_down": "dd", "drivers_p_same": "ds", "drivers_p_up": "du"}
 
 
 def output_path(date: pd.Timestamp) -> Path:

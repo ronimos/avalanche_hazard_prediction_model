@@ -42,6 +42,8 @@ button:focus-visible, select:focus-visible, .row:focus-visible { outline: 2px so
 table.rc { margin-top: 14px; font-size: 0.88rem; }
 table.rc th, table.rc td { padding: 4px 6px; }
 table.rc td:first-child { color: var(--muted); }
+table.rc tr.bandrow th { text-align: left; text-transform: none; letter-spacing: 0; font-size: 0.85rem; color: var(--fg); padding-top: 10px; }
+table.rc tr.drivers td { border-top: none; color: var(--muted); }
 .main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 20px; align-items: start; }
 @media (max-width: 820px) { .main { grid-template-columns: minmax(0, 1fr); } }
 .mapbox { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-width: 0; }
@@ -102,6 +104,10 @@ td.num, th.num { text-align: right; }
           <option value="ntl">Near treeline</option>
           <option value="btl">Below treeline</option>
         </select>
+        <select id="source" aria-label="Rating change source">
+          <option value="">With CAIC outlook</option>
+          <option value="d">Drivers only</option>
+        </select>
       </div>
     </div>
   </header>
@@ -123,9 +129,10 @@ td.num, th.num { text-align: right; }
       </div>
       <div class="card notes">
         <h2>Danger rating change</h2>
-        <p><b>Rating up</b> and <b>Rating down</b> color the map by the chance that CAIC's rating for the selected band tomorrow is higher, or lower, than today's. The model uses today's rating, its change since yesterday, and the snowpack and weather forecast for tomorrow. Polygons CAIC didn't rate today are gray.</p>
-        <p>It is a second opinion next to <b>CAIC's outlook</b>, the rating for tomorrow in today's forecast, shown in the polygon's table. In 2025-26 the outlook was right on 92 to 95% of polygon-days and caught more of the changes than the model. The model's value is on days the snowpack and weather point to a change the outlook doesn't show.</p>
-        <p>High values run high: on held-out seasons, days given over 50% changed about 55% of the time.</p>
+        <p><b>Rating up</b> and <b>Rating down</b> color the map by the chance that CAIC's rating for the selected band tomorrow is higher, or lower, than today's. Polygons CAIC didn't rate today are gray.</p>
+        <p><b>With CAIC outlook</b> (the default) combines the model with <b>CAIC's outlook</b>, the rating for tomorrow in today's forecast. It is the better probability: when the outlook shows no change, the rating changed on only 1 to 3% of polygon-days in 2025-26, and these numbers reflect that.</p>
+        <p><b>Drivers only</b> is the model alone: today's rating, its change since yesterday, and the snowpack and weather forecast for tomorrow. Use it as a second opinion. Its numbers run high next to a no-change outlook, but it is better at picking out which of those days do change.</p>
+        <p>The outlook part is trained on one season (2025-26). The polygon's table shows both.</p>
       </div>
     </div>
   </div>
@@ -167,9 +174,9 @@ const bin = v => binIn(BINS, v);
 const pct = v => v == null ? "n/a" : v < 0.001 ? "<0.1%" : (v * 100).toFixed(v < 0.1 ? 1 : 0) + "%";
 const cm = v => v == null ? "n/a" : Math.round(v * 100) + " cm";
 const level = v => v == null ? "–" : LEVEL_NAMES[Math.round(v)] || "–";
-let view = "p", band = "atl", selected = null;
+let view = "p", band = "atl", source = "", selected = null;
 const isChange = () => view === "up" || view === "down";
-const value = props => isChange() ? props[`${band}_${view[0]}`] : props[view];
+const value = props => isChange() ? props[`${band}_${source}${view[0]}`] : props[view];
 const color = v => v == null ? NO_DATA
   : !isChange() ? COLORS[bin(v)]
   : (view === "up" ? UP_COLORS : DOWN_COLORS)[binIn(CHANGE_BINS, v)];
@@ -219,15 +226,16 @@ function select(id) {
 function ratingTable(r) {
   const rated = Object.keys(BAND_NAMES).filter(b => r[`${b}_t`] != null);
   if (!rated.length) return `<p class="hint" style="margin-top:12px">CAIC didn't rate this polygon today, so there is no rating change forecast.</p>`;
-  const rows = rated.map(b => `<tr><td>${BAND_NAMES[b]}</td><td>${level(r[`${b}_t`])}</td><td>${level(r[`${b}_o`])}</td>
-    <td class="num">${pct(r[`${b}_d`])}</td><td class="num">${pct(r[`${b}_s`])}</td><td class="num">${pct(r[`${b}_u`])}</td></tr>`).join("");
-  return `<table class="rc"><thead><tr><th>Band</th><th>Today</th><th>CAIC outlook</th><th class="num">Down</th><th class="num">Same</th><th class="num">Up</th></tr></thead><tbody>${rows}</tbody></table>`;
+  const rows = rated.map(b => `<tr class="bandrow"><th colspan="4">${BAND_NAMES[b]}: today ${level(r[`${b}_t`])}, outlook ${level(r[`${b}_o`])}</th></tr>
+    <tr><td>with outlook</td><td class="num">${pct(r[`${b}_d`])}</td><td class="num">${pct(r[`${b}_s`])}</td><td class="num">${pct(r[`${b}_u`])}</td></tr>
+    <tr class="drivers"><td>drivers only</td><td class="num">${pct(r[`${b}_dd`])}</td><td class="num">${pct(r[`${b}_ds`])}</td><td class="num">${pct(r[`${b}_du`])}</td></tr>`).join("");
+  return `<table class="rc"><thead><tr><th>Tomorrow's rating</th><th class="num">Down</th><th class="num">Same</th><th class="num">Up</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function drawLegend() {
   const [labels, colors] = isChange() ? [CHANGE_LABELS, view === "up" ? UP_COLORS : DOWN_COLORS] : [LABELS, COLORS];
   const keys = labels.map((l, i) => `<span class="key"><i style="background:${colors[i]}"></i>${l}</span>`);
-  if (isChange()) keys.unshift(`<span class="key">${BAND_NAMES[band]}, chance the rating goes ${view}:</span>`);
+  if (isChange()) keys.unshift(`<span class="key">${BAND_NAMES[band]}, chance the rating goes ${view} (${source ? "drivers only" : "with CAIC outlook"}):</span>`);
   keys.push(`<span class="key"><i style="background:${NO_DATA}"></i>${isChange() ? "not rated by CAIC" : "no data"}</span>`);
   document.getElementById("legend").innerHTML = keys.join("");
 }
@@ -245,6 +253,10 @@ document.querySelectorAll(".switch button").forEach(b => b.addEventListener("cli
 }));
 document.getElementById("band").addEventListener("change", e => {
   band = e.target.value;
+  if (isChange()) redraw();
+});
+document.getElementById("source").addEventListener("change", e => {
+  source = e.target.value;
   if (isChange()) redraw();
 });
 

@@ -96,6 +96,12 @@ def day_ratings(ratings: pd.DataFrame) -> pd.DataFrame:
     return days.assign(date=pd.to_datetime(days["date"]))
 
 
+def outlook_ratings(ratings: pd.DataFrame) -> pd.DataFrame:
+    """CAIC's outlook for each polygon and day t: the day-2 position, from the forecast issued on t-2."""
+    days = ratings[ratings["position"] == 2][["polygon", "date", *BANDS]].reset_index(drop=True)
+    return days.assign(date=pd.to_datetime(days["date"]))
+
+
 def import_forecasts(path: Path, output_path: Optional[Path] = None) -> pd.DataFrame:
     """Writes the ratings in a saved JSON list of AvID forecasts to the AvID ratings file."""
     with open(path, encoding="utf-8") as f:

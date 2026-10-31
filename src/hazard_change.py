@@ -28,11 +28,19 @@ Evaluation is leave-one-season-out, as for the likelihood model:
     - AUC of the probability of an increase and of a decrease;
     - reliability: predicted against observed rate, binned.
 
+CAIC's outlook for t (day 2 of the forecast issued at 4 PM on t-2) is out
+by noon on t-1 and calls changes far better than the drivers. It exists only
+from 2025-26, so it isn't a feature of the change model. Instead a small
+second model (`OutlookModel`) combines the change model's probabilities with
+the outlook's direction. It is trained on the change model's held-out-season
+probabilities for the seasons with outlooks, and evaluated within those
+seasons by leaving out one 14-day block at a time.
+
 Daily run: `predict` pulls the current CAIC forecasts from AvID (today's
 rating and CAIC's outlook for tomorrow), adds yesterday's rating from the
-ratings history, and gives the three probabilities per band for every polygon
-CAIC rated today. Drivers come from the same SNOWPACK build as the likelihood
-forecast.
+ratings history, and gives, per band, the three probabilities with the
+outlook and the drivers-only ones, for every polygon CAIC rated today.
+Drivers come from the same SNOWPACK build as the likelihood forecast.
 
 Usage:
     python hazard_change.py                    # held-out-season evaluation
@@ -71,6 +79,8 @@ CHANGE_NAMES = ["down", "same", "up"]
 REGIONAL_DRIVERS = ["HN24", "HN72", "SWE_change_3d", "VW_max", "TA_max_change_24h"]
 DRIVER_FEATURES = ld.DRIVERS + ["day_of_season", "Sn_capped", "Ss_capped"] + [f"{c}_region" for c in REGIONAL_DRIVERS]
 OUTPUT_DIR = config.RESULTS_DIR / "hazard_change"
+# Days per block when evaluating the outlook model within a season
+OUTLOOK_BLOCK_DAYS = 14
 
 
 def rating_features(band: str) -> List[str]:
@@ -89,19 +99,29 @@ def load_ratings() -> pd.DataFrame:
     return ratings.sort_values(["polygon", "date"]).reset_index(drop=True)
 
 
-def build_change_table(table: pd.DataFrame, ratings: pd.DataFrame) -> pd.DataFrame:
+def load_outlooks() -> pd.DataFrame:
+    """CAIC's outlook per polygon and day t: day 2 of the AvID forecast issued at 4 PM on t-2."""
+    path = config.PATHS["RAW_DATA"]["avid_ratings"]
+    if not path.exists():
+        return pd.DataFrame(columns=["polygon", "date", *BANDS])
+    return caic_ratings.outlook_ratings(pd.read_csv(path, parse_dates=["date"]))
+
+
+def build_change_table(table: pd.DataFrame, ratings: pd.DataFrame, outlooks: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     """
     Joins ratings, with what is known at noon on t-1, to the modeling table.
 
     Args:
         table (pd.DataFrame): Modeling table from `likelihood_data` (drivers for day t).
         ratings (pd.DataFrame): Output of `load_ratings`.
+        outlooks (Optional[pd.DataFrame]): CAIC's outlook per polygon and day t (`load_outlooks`).
 
     Returns:
         pd.DataFrame: One row per polygon and day t with, per band, the rating
                       ('atl'), the rating for t-1 ('atl_prev'), the change from
-                      t-2 to t-1 ('atl_trend') and the change to t ('atl_change',
-                      clipped to -1/0/1), plus regional driver means.
+                      t-2 to t-1 ('atl_trend'), the change to t ('atl_change',
+                      clipped to -1/0/1) and CAIC's outlook for t ('atl_outlook',
+                      missing without one), plus regional driver means.
     """
     ratings = ratings.copy()
     by_polygon = ratings.groupby("polygon")
@@ -114,6 +134,12 @@ def build_change_table(table: pd.DataFrame, ratings: pd.DataFrame) -> pd.DataFra
         ratings[f"{band}_change"] = np.sign(ratings[band] - prev1)
 
     df = ratings.merge(table, on=["polygon", "date"], how="inner")
+    if outlooks is not None and len(outlooks):
+        renamed = outlooks[["polygon", "date", *BANDS]].rename(columns={b: f"{b}_outlook" for b in BANDS})
+        df = df.merge(renamed.astype({"polygon": df["polygon"].dtype}), on=["polygon", "date"], how="left")
+    for band in BANDS:
+        if f"{band}_outlook" not in df:
+            df[f"{band}_outlook"] = np.nan
     for column in REGIONAL_DRIVERS:
         df[f"{column}_region"] = df.groupby(["region", "date"])[column].transform("mean")
     return df.reset_index(drop=True)
@@ -169,6 +195,38 @@ class ChangeModel:
         return _mask_impossible(proba, df[f"{self.band}_prev"].to_numpy())
 
 
+class OutlookModel:
+    """
+    Multinomial logistic regression of the change on the change model's log
+    probabilities, the direction of CAIC's outlook from the rating for t-1
+    (down, same, up or missing) and the rating for t-1.
+    """
+
+    def __init__(self, band: str, C: float = 1.0, use_model: bool = True):
+        self.band = band
+        self.use_model = use_model
+        self.model = LogisticRegression(C=C, max_iter=3000)
+
+    def features(self, proba: np.ndarray, df: pd.DataFrame) -> np.ndarray:
+        prev = df[f"{self.band}_prev"].to_numpy()
+        direction = np.sign(df[f"{self.band}_outlook"].to_numpy() - prev)
+        parts = [np.column_stack([direction == c for c in CHANGES] + [np.isnan(direction)]),
+                 np.column_stack([prev == level for level in range(LEVELS[0], LEVELS[1] + 1)])]
+        if self.use_model:
+            parts.insert(0, np.log(np.clip(proba, 1e-4, 1)))
+        return np.hstack(parts).astype(float)
+
+    def fit(self, proba: np.ndarray, df: pd.DataFrame) -> "OutlookModel":
+        self.model.fit(self.features(proba, df), df[f"{self.band}_change"].astype(int))
+        return self
+
+    def predict_proba(self, proba: np.ndarray, df: pd.DataFrame) -> np.ndarray:
+        classes = list(self.model.classes_)
+        raw = self.model.predict_proba(self.features(proba, df))
+        out = np.column_stack([raw[:, classes.index(c)] if c in classes else np.zeros(len(df)) for c in CHANGES])
+        return _mask_impossible(out, df[f"{self.band}_prev"].to_numpy())
+
+
 MODELS = {"transition": TransitionModel, "change_logistic": ChangeModel}
 
 
@@ -195,6 +253,71 @@ def leave_one_season_out(df: pd.DataFrame, band: str) -> pd.DataFrame:
             out = out.assign(model=name, band=band, change=test[f"{band}_change"].astype(int).to_numpy())
             folds.append(out.assign(**{n: proba[:, i] for i, n in enumerate(CHANGE_NAMES)}))
     return pd.concat(folds, ignore_index=True)
+
+
+def outlook_seasons(rows: pd.DataFrame, band: str) -> List[int]:
+    """Seasons with CAIC outlooks for the band."""
+    return sorted(int(s) for s in rows.loc[rows[f"{band}_outlook"].notna(), "season"].unique())
+
+
+def held_out_change_proba(rows: pd.DataFrame, band: str, seasons: List[int]) -> pd.DataFrame:
+    """Rows of `seasons` with the change model's probabilities from a fit on the other seasons."""
+    parts = []
+    for season in seasons:
+        train, test = rows[rows["season"] != season], rows[rows["season"] == season]
+        proba = ChangeModel(band).fit(train).predict_proba(test)
+        parts.append(test.assign(**{f"model_{n}": proba[:, i] for i, n in enumerate(CHANGE_NAMES)}))
+    return pd.concat(parts) if parts else rows.iloc[:0]
+
+
+def evaluate_outlook(df: pd.DataFrame, band: str) -> pd.DataFrame:
+    """
+    Within the seasons with outlooks: the change model's held-out-season
+    probabilities, and the outlook model with and without them, scored by
+    leaving out one OUTLOOK_BLOCK_DAYS block at a time.
+
+    Returns:
+        pd.DataFrame: Held-out rows with 'model' ('change_logistic',
+                      'outlook_only', 'change_with_outlook'), 'season',
+                      'polygon', 'date', 'prev', 'outlook', 'change' and one
+                      probability column per CHANGE_NAMES.
+    """
+    rows = band_rows(df, band)
+    rows = held_out_change_proba(rows, band, outlook_seasons(rows, band)).reset_index(drop=True)
+    if rows.empty:
+        return pd.DataFrame()
+    base = rows[[f"model_{n}" for n in CHANGE_NAMES]].to_numpy()
+    block = rows["season"].astype(str) + "_" + ((rows["date"] - rows.groupby("season")["date"].transform("min")).dt.days // OUTLOOK_BLOCK_DAYS).astype(str)
+    versions = {"change_logistic": base}
+    for name, use_model in [("outlook_only", False), ("change_with_outlook", True)]:
+        proba = np.zeros_like(base)
+        for b in block.unique():
+            test = (block == b).to_numpy()
+            model = OutlookModel(band, use_model=use_model).fit(base[~test], rows[~test])
+            proba[test] = model.predict_proba(base[test], rows[test])
+        versions[name] = proba
+    out = rows[["season", "polygon", "date", f"{band}_prev", f"{band}_outlook"]].rename(
+        columns={f"{band}_prev": "prev", f"{band}_outlook": "outlook"})
+    out = out.assign(band=band, change=rows[f"{band}_change"].astype(int).to_numpy())
+    return pd.concat([out.assign(model=name, **{n: p[:, i] for i, n in enumerate(CHANGE_NAMES)})
+                      for name, p in versions.items()], ignore_index=True)
+
+
+def outlook_scores(predictions: pd.DataFrame) -> pd.DataFrame:
+    """Log loss and AUCs per band and model, overall and on days the outlook shows no change."""
+    records = []
+    for (band, model), g in predictions.groupby(["band", "model"]):
+        y, proba = g["change"].to_numpy(), g[CHANGE_NAMES].to_numpy()
+        quiet = (np.sign(g["outlook"] - g["prev"]).fillna(0) == 0).to_numpy()
+        records.append({
+            "band": band, "model": model, "n": len(g), "log_loss": log_loss(y, proba, labels=CHANGES),
+            "auc_up": roc_auc_score(y == 1, g["up"]), "auc_down": roc_auc_score(y == -1, g["down"]),
+            "quiet_rate_up": np.mean(y[quiet] == 1), "quiet_mean_p_up": g["up"][quiet].mean(),
+            "quiet_auc_up": roc_auc_score(y[quiet] == 1, g["up"][quiet]),
+            "quiet_rate_down": np.mean(y[quiet] == -1), "quiet_mean_p_down": g["down"][quiet].mean(),
+            "quiet_auc_down": roc_auc_score(y[quiet] == -1, g["down"][quiet]),
+        })
+    return pd.DataFrame(records)
 
 
 def _brier(y: np.ndarray, proba: np.ndarray) -> float:
@@ -235,20 +358,36 @@ def reliability(predictions: pd.DataFrame, edges: List[float] = (0, 0.05, 0.1, 0
 
 
 def output_columns() -> List[str]:
-    """Daily output per band: CAIC's rating for t-1, CAIC's outlook for t, and the three probabilities."""
+    """
+    Daily output per band: CAIC's rating for t-1, CAIC's outlook for t, the
+    three probabilities with the outlook ('p_up') and from the drivers only
+    ('drivers_p_up').
+    """
     return [f"{band}_{name}" for band in BANDS
-            for name in ["caic_today", "caic_outlook", *[f"p_{change}" for change in CHANGE_NAMES]]]
+            for name in ["caic_today", "caic_outlook", *[f"p_{change}" for change in CHANGE_NAMES],
+                         *[f"drivers_p_{change}" for change in CHANGE_NAMES]]]
 
 
 def train() -> None:
-    """Fits one model per band on every season with ratings and saves them."""
-    table = build_change_table(ld.load_modeling_table(), load_ratings())
-    models = {band: ChangeModel(band).fit(band_rows(table, band)) for band in BANDS}
+    """
+    Fits the change model per band on every season with ratings, and the
+    outlook model on its held-out-season probabilities for the seasons with
+    outlooks, and saves them.
+    """
+    table = build_change_table(ld.load_modeling_table(), load_ratings(), load_outlooks())
+    models, outlook_models = {}, {}
+    for band in BANDS:
+        rows = band_rows(table, band)
+        models[band] = ChangeModel(band).fit(rows)
+        with_outlook = held_out_change_proba(rows, band, outlook_seasons(rows, band))
+        base = with_outlook[[f"model_{n}" for n in CHANGE_NAMES]].to_numpy()
+        outlook_models[band] = OutlookModel(band).fit(base, with_outlook)
     path = config.PATHS["ARTIFACTS"]["hazard_change_model"]
     path.parent.mkdir(parents=True, exist_ok=True)
     seasons = sorted(int(s) for s in table["season"].unique())
-    joblib.dump({"models": models, "seasons": seasons}, path)
-    logging.info(f"Hazard change models trained on seasons {seasons} and saved to '{path}'.")
+    o_seasons = sorted(int(s) for s in table.loc[table["atl_outlook"].notna(), "season"].unique())
+    joblib.dump({"models": models, "outlook_models": outlook_models, "seasons": seasons, "outlook_seasons": o_seasons}, path)
+    logging.info(f"Hazard change models trained on seasons {seasons}, outlook models on {o_seasons}; saved to '{path}'.")
 
 
 def forecast_inputs(date: pd.Timestamp, ratings: pd.DataFrame, drivers: pd.DataFrame) -> pd.DataFrame:
@@ -257,21 +396,28 @@ def forecast_inputs(date: pd.Timestamp, ratings: pd.DataFrame, drivers: pd.DataF
 
     Args:
         date (pd.Timestamp): Forecast day t.
-        ratings (pd.DataFrame): CAIC ratings per polygon and day (`caic_ratings.day_ratings`).
-                                Only days before t are used.
+        ratings (pd.DataFrame): AvID ratings (`caic_ratings.COLUMNS`), or ratings per polygon
+                                and day (`caic_ratings.day_ratings`). Only ratings for days
+                                before t and, from AvID, the outlook for t are used.
         drivers (pd.DataFrame): Modeling-table rows for day t (`likelihood_forecast.forecast_table`).
     """
+    outlooks = None
+    if "position" in ratings:
+        outlooks = caic_ratings.outlook_ratings(ratings)
+        outlooks = outlooks[outlooks["date"] == date]
+        ratings = caic_ratings.day_ratings(ratings)
     known = ratings[ratings["date"] < date]
     rated_yesterday = known.loc[known["date"] == date - pd.Timedelta(days=1), ["polygon"]]
     # A row for day t without ratings, so the lags for t line up
     ratings = pd.concat([known, rated_yesterday.assign(date=date)], ignore_index=True)
     drivers = drivers.assign(region=drivers["polygon"].map(ld.polygon_regions()))
-    return build_change_table(drivers, ratings.sort_values(["polygon", "date"]))
+    return build_change_table(drivers, ratings.sort_values(["polygon", "date"]), outlooks)
 
 
 def predict(date: pd.Timestamp, history: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     """
-    Probability that each band's rating goes down, stays or goes up on day t, for every polygon CAIC rated on t-1.
+    Probability that each band's rating goes down, stays or goes up on day t, for every polygon CAIC rated on t-1,
+    with CAIC's outlook and from the drivers only.
 
     Args:
         date (pd.Timestamp): Forecast day t.
@@ -283,28 +429,35 @@ def predict(date: pd.Timestamp, history: Optional[pd.DataFrame] = None) -> pd.Da
     """
     fitted = joblib.load(config.PATHS["ARTIFACTS"]["hazard_change_model"])
     history = caic_ratings.fetch_current() if history is None else history
-    rows = forecast_inputs(date, caic_ratings.day_ratings(history), likelihood_forecast.forecast_table(date))
+    rows = forecast_inputs(date, history, likelihood_forecast.forecast_table(date))
     if rows.empty:
         logging.warning(f"No CAIC ratings for {(date - pd.Timedelta(days=1)).date()}; no rating change forecast for {date.date()}.")
         return pd.DataFrame(columns=["polygon", *output_columns()]).astype({"polygon": int})
 
-    outlook = history[(history["position"] == 2) & (history["date"] == date)].set_index("polygon")
+    outlook_models = fitted.get("outlook_models")
+    if outlook_models is None:
+        logging.warning("The hazard change artifact has no outlook models; retrain it. Only drivers-only probabilities are given.")
     out = rows[["polygon"]].copy()
     for band in BANDS:
         rated = rows[f"{band}_prev"].notna().to_numpy()
-        proba = np.full((len(rows), len(CHANGES)), np.nan)
+        drivers_only = np.full((len(rows), len(CHANGES)), np.nan)
+        with_outlook = np.full((len(rows), len(CHANGES)), np.nan)
         if rated.any():
-            proba[rated] = fitted["models"][band].predict_proba(rows[rated])
+            drivers_only[rated] = fitted["models"][band].predict_proba(rows[rated])
+            if outlook_models is not None:
+                with_outlook[rated] = outlook_models[band].predict_proba(drivers_only[rated], rows[rated])
         out[f"{band}_caic_today"] = rows[f"{band}_prev"].to_numpy()
-        out[f"{band}_caic_outlook"] = out["polygon"].map(outlook[band]) if band in outlook else np.nan
+        out[f"{band}_caic_outlook"] = rows[f"{band}_outlook"].to_numpy()
         for i, change in enumerate(CHANGE_NAMES):
-            out[f"{band}_p_{change}"] = proba[:, i]
-    return out.reset_index(drop=True)
+            out[f"{band}_p_{change}"] = with_outlook[:, i]
+        for i, change in enumerate(CHANGE_NAMES):
+            out[f"{band}_drivers_p_{change}"] = drivers_only[:, i]
+    return out[["polygon", *output_columns()]].reset_index(drop=True)
 
 
 def evaluate() -> None:
-    """Held-out-season evaluation; writes predictions, scores and reliability to OUTPUT_DIR."""
-    table = build_change_table(ld.load_modeling_table(), load_ratings())
+    """Held-out-season evaluation, and the outlook model within the outlook seasons; writes results to OUTPUT_DIR."""
+    table = build_change_table(ld.load_modeling_table(), load_ratings(), load_outlooks())
     predictions = pd.concat([leave_one_season_out(table, band) for band in BANDS], ignore_index=True)
     metrics, calibration = scores(predictions), reliability(predictions)
 
@@ -312,10 +465,15 @@ def evaluate() -> None:
     predictions.to_csv(OUTPUT_DIR / "predictions.csv", index=False)
     metrics.to_csv(OUTPUT_DIR / "metrics.csv", index=False)
     calibration.to_csv(OUTPUT_DIR / "reliability.csv", index=False)
+    outlook = pd.concat([evaluate_outlook(table, band) for band in BANDS], ignore_index=True)
+    outlook_metrics = outlook_scores(outlook)
+    outlook.to_csv(OUTPUT_DIR / "outlook_predictions.csv", index=False)
+    outlook_metrics.to_csv(OUTPUT_DIR / "outlook_metrics.csv", index=False)
 
     pd.set_option("display.width", 200)
     logging.info(f"Held-out-season scores:\n{metrics.round(3).to_string(index=False)}")
     logging.info(f"Reliability:\n{calibration.round(3).to_string(index=False)}")
+    logging.info(f"With CAIC's outlook, {OUTLOOK_BLOCK_DAYS}-day blocks held out:\n{outlook_metrics.round(3).to_string(index=False)}")
     logging.info(f"Results saved to '{OUTPUT_DIR}'")
 
 

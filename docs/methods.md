@@ -422,6 +422,17 @@ Skill is the fractional improvement over the baseline. The model beats it in eve
 
 Calibration, all seasons pooled: up to a predicted 50% the observed rates are within 6 points of the predicted ones, and mostly a little lower. Above 50% the model is overconfident: days given about 69% for an increase went up 54 to 56% of the time in every band. For decreases above 50%, the observed rate is 66 to 67% above and near treeline (predicted 62%) and 53% below treeline (predicted 67%).
 
+Most of that overconfidence is November 2025. The 2023-24 and 2024-25 ratings start in December, so the 2025-26 fold never saw a November, and that November CAIC kept every polygon at Low all month (no increase on 0.1% of polygon-days) while the model gave 12% on average. Earlier Novembers weren't like that: in the AvID forecasts for the older polygon set, near-treeline ratings went up on 6.4%, 2.1% and 10.1% of polygon-days in November 2022, 2023 and 2024. So November 2025 is a season anomaly (the thin early snowpack of the worst season in decades), not a rule to build in. Without November, days given about 69% for an increase went up 56 to 64% of the time; lower increase probabilities are within 4 points, and decreases given 5 to 30% happen up to 8 points more often than predicted.
+
+### Recalibration
+
+Two recalibrations were tested, nested inside the leave-one-season-out loop: for each held-out season the calibrator was fit on out-of-fold predictions within the two training seasons, then applied to the outer model.
+
+- **Temperature scaling** (one parameter per band) learned T = 1.0 to 1.45, softening the probabilities. It lowered log loss in 5 of 9 band-seasons, by at most 0.004, and raised it in the other 4, by up to 0.032 (above treeline 2024-25). The inner models are fit on one season and are more overconfident than the two-season model, so the correction overshoots.
+- **Vector scaling** (a multinomial logistic regression on the log probabilities) was worse in 6 of 9.
+
+Neither is used. The remaining gap at the top is about 5 to 13 points on a few hundred days per band.
+
 ### Against CAIC's outlook
 
 CAIC's own outlook for day t, day 2 of the forecast issued at 4 PM on t−2, is out by noon on t−1. In 2025-26 it was right on 93%, 92% and 95% of polygon-days above, near and below treeline, against 86%, 86% and 93% for carrying the rating forward. Held-out on 2025-26, with as many days flagged as the outlook flags:
@@ -435,22 +446,38 @@ CAIC's own outlook for day t, day 2 of the forecast issued at 4 PM on t−2, is 
 | Below treeline | Up | 551 | 67% | 67% | 44% | 44% | 184 | 0.92 |
 | Below treeline | Down | 504 | 48% | 87% | 19% | 35% | 263 | 0.94 |
 
-The outlook is far better at calling changes; the forecasters see more than the snowpack drivers carry. The model's use is on the days the outlook shows no change: there it still ranks the changes that came, best below treeline and for decreases. The outlook is only available as a feature for one season, so it isn't in the model yet; with more seasons of AvID forecasts, the change from the outlook is the natural target.
+The outlook is far better at calling changes; the forecasters see more than the snowpack drivers carry. The model's use is on the days the outlook shows no change: there it still ranks the changes that came, best below treeline and for decreases.
+
+### Combining the model with the outlook
+
+The outlook exists only from 2025-26, so it can't be a feature of the change model, which is evaluated by holding out whole seasons. Instead a second, small model (`OutlookModel`) combines them: a multinomial logistic regression of the change on the change model's log probabilities, the direction of the outlook from the rating for t−1 (down, same, up or missing) and the rating for t−1. It is trained on the change model's held-out probabilities for 2025-26 (the fit on 2023-24 and 2024-25), so it learns how much to trust probabilities like the ones the model gives on a new season. It is evaluated within 2025-26 by leaving out one 14-day block at a time (`outlook_metrics.csv`):
+
+| Band | Log loss: drivers only / outlook only / combined | AUC of an increase: drivers / outlook / combined | AUC of a decrease: drivers / outlook / combined |
+| --- | --- | --- | --- |
+| Above treeline | 0.407 / 0.231 / **0.223** | 0.85 / 0.89 / **0.94** | 0.88 / 0.90 / **0.92** |
+| Near treeline | 0.408 / 0.287 / **0.272** | 0.85 / 0.80 / **0.87** | 0.87 / 0.91 / **0.93** |
+| Below treeline | 0.222 / 0.159 / **0.150** | 0.91 / 0.73 / **0.94** | 0.94 / **0.96** / 0.96 |
+
+"Outlook only" is the same regression without the change model's probabilities. The combination is the best probability in every band, but at the outlook's own number of flags it flags almost the same days as the outlook, so it doesn't call more changes.
+
+Its main effect is on the days the outlook shows no change. There the rating went up on 1.2%, 2.6% and 1.3% of polygon-days above, near and below treeline, and down on 2.5%, 3.2% and 1.9%. The drivers-only model gives increases 14%, 12% and 7% on average on those days, far too high; the combination gives 1.4%, 2.7% and 1.4%. The cost is ranking among those days: AUC of an increase drops from 0.66, 0.75 and 0.92 (drivers only) to 0.65, 0.59 and 0.84, and of a decrease from 0.84, 0.86 and 0.94 to 0.78, 0.85 and 0.92. So the daily output carries both: the combined probability as the main number, and the drivers-only one as a second opinion that is better at picking out which no-change days do change.
 
 ### Daily run
 
 - **Ratings.** `caic_ratings.fetch_current` pulls the current forecasts from the AvID API (`AVID_API_BASE` and `AVID_API_KEY` or `API_KEY` in the project's `.env`, read by `config.py`) and adds them to `data/processed/caic_ratings_history.csv`. The forecast current at noon on t−1 gives the rating for t−1 and CAIC's outlook for t; the history gives the rating for t−2.
-- **Training.** `python hazard_change.py --train` fits on every season with ratings and saves `artifacts/hazard_change_model.joblib`.
+- **Training.** `python hazard_change.py --train` fits the change model on every season with ratings and the outlook model on its held-out probabilities for the seasons with outlooks, and saves both in `artifacts/hazard_change_model.joblib`. An artifact without the outlook model still gives the drivers-only probabilities.
 - **Prediction.** `predict.py` calls `hazard_change.predict` after the likelihood forecast, reusing its driver table. Polygons CAIC didn't rate on t−1 get no prediction. A failure, such as a missing key, logs an error and leaves the other outputs in place.
-- **Output.** The CSV and JSON gain, per band (`atl`, `ntl`, `btl`): `_caic_today`, `_caic_outlook`, `_p_down`, `_p_same` and `_p_up`. The map adds **Rating up** and **Rating down** layers with a band menu, and each polygon's panel shows today's rating, CAIC's outlook and the three probabilities.
+- **Output.** The CSV and JSON gain, per band (`atl`, `ntl`, `btl`): `_caic_today`, `_caic_outlook`, `_p_down`, `_p_same` and `_p_up` (with the outlook), and `_drivers_p_down`, `_drivers_p_same` and `_drivers_p_up` (drivers only). The map adds **Rating up** and **Rating down** layers with a band menu and a menu for the source (with CAIC outlook, the default, or drivers only), and each polygon's panel shows today's rating, CAIC's outlook and both sets of probabilities.
 
 ### Limitations
 
 1. **Three seasons, one of them new.** Each held-out score comes from one season and there are no confidence intervals. 2025-26 adds 51 polygons that weren't in the earlier file and lacks 8 that were, and it ends on February 28.
 2. **It predicts CAIC's ratings, not avalanche conditions.** It learns when forecasters change the rating, including their habits, such as stepping down after storms.
-3. **CAIC's outlook is better at calling changes.** Read the model next to it, not instead of it.
-4. **Rated polygons only.** Polygons CAIC doesn't rate get no prediction.
-5. **High probabilities run high.** Above 50%, about 55% of predicted increases happened.
+3. **CAIC's outlook is better at calling changes.** The combined probability leans on it; the drivers-only one is the independent second opinion.
+4. **The combination is trained on one season.** How much to trust the outlook against the drivers comes from 2025-26 alone, evaluated within that season. Refit it before each season as AvID forecasts accumulate.
+5. **Rated polygons only.** Polygons CAIC doesn't rate get no prediction.
+6. **High probabilities run high.** For the drivers-only model above 50%, about 55% of predicted increases happened, 56 to 64% without November 2025. Recalibration didn't help on held-out seasons.
+7. **No November in two of the three training seasons.** November ratings exist only for 2025-26, when CAIC kept every polygon at Low. Treat November probabilities with care.
 
 Work happens on the `dev` branch. The production forecast keeps running the current models until the new one beats both baselines on held-out seasons.
 
@@ -465,12 +492,14 @@ Work happens on the `dev` branch. The production forecast keeps running the curr
 - [x] Connect the model to `predict.py`, keeping the current output format (`src/likelihood_forecast.py`; new fields added)
 - [x] Model the probability that tomorrow's danger rating changes, per band (`src/hazard_change.py`, with tests)
 - [x] Add the rating change to the daily run and the map (`src/caic_ratings.py` pulls the ratings from AvID)
-- [ ] Add CAIC's outlook as a feature once there are more seasons of AvID forecasts
+- [x] Test recalibrating the rating change model: not used (no held-out gain; the top-bin gap was mostly November 2025)
+- [x] Combine the rating change model with CAIC's outlook (`OutlookModel`) and show both on the map
+- [ ] Make the outlook a feature of the change model, evaluated by season, once there are more seasons of AvID forecasts
 
 Open questions:
 
 - **Observer access by polygon.** Highway paths, ski-area boundaries and trailhead locations would give the detection model its strongest covariates. Is there a layer for these?
-- **Detection prior.** Which other polygons can be treated as near-fully monitored, like polygon 132 on the Red Mountain Pass corridor?
+- **Detection prior (answered 2026-10-31).** The polygons with the most avalanche records are the ones with the highest reporting rate; the old model's 7 training polygons were these. They now cover polygons 92, 94, 95, 132, 85, 37 and some neighbors, and the five polygons with the most dry slab record days (94, 95, 132, 92, 85) are all among them. The fitted detection already agrees (median 0.98 for 95, 0.96 for 132, 0.91 for 85, 0.86 for 94, 0.83 for 92), so the prior needs no change.
 - **Avalanche terrain by polygon.** Deferred: the area of avalanche-prone slopes (about 30–45°) from a DEM, as an occurrence covariate, would let the model attribute part of the difference between polygons to terrain instead of reporting.
 - **Committing the export.** The CSV includes free-text comments and descriptions. Should it go into the public GitHub repo, or stay on the server only?
 - **Thin 2025-26 snowpack.** Median November to May modeled snow depth was 0.27 m, against 0.59 m in 2023-24 and 0.48 m in 2024-25. This is real: 2025-26 was the worst season in about 50 years across much of Colorado. Results for that season should carry less weight.
