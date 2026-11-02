@@ -119,20 +119,6 @@ td.num, th.num { text-align: right; }
     <div class="detail">
       <div class="card" id="detail" aria-live="polite"></div>
       <p class="hint">Hover or tap a polygon to see its numbers. Switch between the street map and satellite imagery with the layer button on the map.</p>
-      <div class="card notes">
-        <h2>Best estimate, low end, high end</h2>
-        <p>The model can't pin down a polygon's probability exactly, so it gives a <b>best estimate</b> and a range. The <b>80% range</b> runs from the <b>low end</b> to the <b>high end</b>: the model puts an 80% chance on the true probability being inside it, 10% on it being lower than the low end and 10% on it being higher than the high end.</p>
-        <p>Example: "8%, 80% range 4% to 12%" means the best estimate is 8%, and the model would be surprised, but not shocked, if the true value were as low as 4% or as high as 12%.</p>
-        <p>The buttons recolor the map. <b>Low end</b> shows each polygon at the bottom of its range, the most optimistic value the model finds plausible. <b>High end</b> shows the top of the range, the most pessimistic plausible value, for a cautious reading. Each polygon is shown at its own end; the high-end map is not one scenario in which every polygon is at its worst at once.</p>
-        <p>The range is the model's uncertainty about the right probability. It is not a range of weather outcomes or avalanche sizes, and it doesn't cover the equal-rate assumption described below.</p>
-      </div>
-      <div class="card notes">
-        <h2>Danger rating change</h2>
-        <p><b>Rating change</b> colors the map by the forecast change in CAIC's rating for the selected band from today to tomorrow. The hue gives the direction: <b>blue</b> for a lower rating, <b>red</b> for a higher one. The depth of the color gives the chance of that change: the darker the polygon, the more likely the rating moves. Polygons where both chances are under 5% are pale, meaning the rating will most likely stay the same. The chances of going up and going down are rarely both large, so each polygon is colored by the larger of the two; the panel shows both. Polygons CAIC didn't rate today are gray.</p>
-        <p><b>With CAIC outlook</b> (the default) combines the model with <b>CAIC's outlook</b>, the rating for tomorrow in today's forecast. It is the better probability: when the outlook shows no change, the rating changed on only 1 to 3% of polygon-days in 2025-26, and these numbers reflect that.</p>
-        <p><b>Drivers only</b> is the model alone: today's rating, its change since yesterday, and the snowpack and weather forecast for tomorrow. Use it as a second opinion. Its numbers run high next to a no-change outlook, but it is better at picking out which of those days do change.</p>
-        <p>The outlook part is trained on one season (2025-26). The polygon's table shows both.</p>
-      </div>
     </div>
   </div>
 
@@ -150,6 +136,23 @@ td.num, th.num { text-align: right; }
       <p>The model assumes every polygon produces avalanches at the same rate under the same snowpack. That holds best for natural avalanches; triggered ones also depend on traffic, which isn't measured. A quiet polygon's own number of avalanches may be lower than its value here. Rank days within a polygon with confidence; compare polygons with care.</p>
       <p>The 80% range covers the model's statistical uncertainty, not that assumption.__SEASON_NOTE__</p>
       <p><a href="__METHODS_URL__" target="_blank" rel="noopener">Methods: what the probability means and its limitations</a></p>
+    </div>
+  </div>
+
+  <div class="lower">
+    <div class="card notes">
+      <h2>Best estimate, low end, high end</h2>
+      <p>The model can't pin down a polygon's probability exactly, so it gives a <b>best estimate</b> and a range. The <b>80% range</b> runs from the <b>low end</b> to the <b>high end</b>: the model puts an 80% chance on the true probability being inside it, 10% on it being lower than the low end and 10% on it being higher than the high end.</p>
+      <p>Example: "8%, 80% range 4% to 12%" means the best estimate is 8%, and the model would be surprised, but not shocked, if the true value were as low as 4% or as high as 12%.</p>
+      <p>The buttons recolor the map. <b>Low end</b> shows each polygon at the bottom of its range, the most optimistic value the model finds plausible. <b>High end</b> shows the top of the range, the most pessimistic plausible value, for a cautious reading. Each polygon is shown at its own end; the high-end map is not one scenario in which every polygon is at its worst at once.</p>
+      <p>The range is the model's uncertainty about the right probability. It is not a range of weather outcomes or avalanche sizes, and it doesn't cover the equal-rate assumption described under <b>Reading the numbers</b>.</p>
+    </div>
+    <div class="card notes">
+      <h2>Danger rating change</h2>
+      <p><b>Rating change</b> colors the map by the forecast change in CAIC's rating for the selected band from today to tomorrow. The hue gives the direction: <b>blue</b> for a lower rating, <b>red</b> for a higher one. The depth of the color gives the chance of that change: the darker the polygon, the more likely the rating moves. Polygons where both chances are under 5% are pale, meaning the rating will most likely stay the same. The chances of going up and going down are rarely both large, so each polygon is colored by the larger of the two; the panel shows both. Polygons CAIC didn't rate today are gray.</p>
+      <p><b>With CAIC outlook</b> (the default) combines the model with <b>CAIC's outlook</b>, the rating for tomorrow in today's forecast. It is the better probability: when the outlook shows no change, the rating changed on only 1 to 3% of polygon-days in 2025-26, and these numbers reflect that.</p>
+      <p><b>Drivers only</b> is the model alone: today's rating, its change since yesterday, and the snowpack and weather forecast for tomorrow. Use it as a second opinion. Its numbers run high next to a no-change outlook, but it is better at picking out which of those days do change.</p>
+      <p>The outlook part is trained on one season (2025-26). The polygon's table shows both.</p>
     </div>
   </div>
 </div>
