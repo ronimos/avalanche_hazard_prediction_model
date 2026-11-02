@@ -72,6 +72,8 @@ def map_features(polygons: gpd.GeoDataFrame, predictions: pd.DataFrame) -> dict:
                 "danger": DANGER_LEVELS.get(int(danger), "No data") if pd.notna(danger) else "No data",
                 **{f"{band}_{short}": _value(row, f"{band}_{field}", 3)
                    for band in BANDS for field, short in CHANGE_FIELDS.items()},
+                **{f"{band}_why": row.get(f"{band}_drivers_why") if isinstance(row.get(f"{band}_drivers_why"), str) else None
+                   for band in BANDS},
             },
         })
     return {"type": "FeatureCollection", "features": features}

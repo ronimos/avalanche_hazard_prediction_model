@@ -26,7 +26,7 @@ def test_map_features_carry_values_and_leave_missing_polygons_empty():
     features = dsm.map_features(_polygons(), _predictions())["features"]
 
     first, second = (f["properties"] for f in features)
-    no_change = {f"{band}_{short}": None for band in dsm.BANDS for short in dsm.CHANGE_FIELDS.values()}
+    no_change = {f"{band}_{short}": None for band in dsm.BANDS for short in [*dsm.CHANGE_FIELDS.values(), "why"]}
     assert first == {"id": 1, "range": "Front Range", "region": "Front Range", "p": 0.12, "lo": 0.08, "hi": 0.17,
                      "rec": 0.01, "hs": 0.85, "hn72": 0.3, "danger": "Moderate", **no_change}
     assert second["p"] is None and second["range"] == "" and second["danger"] == "No data"
@@ -34,12 +34,13 @@ def test_map_features_carry_values_and_leave_missing_polygons_empty():
 
 def test_map_features_carry_rating_change():
     predictions = _predictions().assign(atl_caic_today=3.0, atl_caic_outlook=4.0, atl_p_down=0.05,
-                                        atl_p_same=0.6, atl_p_up=0.35, atl_drivers_p_up=0.5)
+                                        atl_p_same=0.6, atl_p_up=0.35, atl_drivers_p_up=0.5,
+                                        atl_drivers_why="Up: new snow raises it")
 
     first = dsm.map_features(_polygons(), predictions)["features"][0]["properties"]
 
     assert (first["atl_t"], first["atl_o"], first["atl_d"], first["atl_s"], first["atl_u"]) == (3, 4, 0.05, 0.6, 0.35)
-    assert first["atl_du"] == 0.5
+    assert first["atl_du"] == 0.5 and first["atl_why"] == "Up: new snow raises it"
     assert first["ntl_u"] is None and first["atl_dd"] is None
 
 

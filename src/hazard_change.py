@@ -81,6 +81,11 @@ DRIVER_FEATURES = ld.DRIVERS + ["day_of_season", "Sn_capped", "Ss_capped"] + [f"
 OUTPUT_DIR = config.RESULTS_DIR / "hazard_change"
 # Days per block when evaluating the outlook model within a season
 OUTLOOK_BLOCK_DAYS = 14
+# Explaining the drivers-only forecast: the largest feature-group contributions to the log-odds of the
+# change against no change, relative to an average training day; smaller ones than WHY_MIN are left out
+WHY_TOP = 3
+WHY_MIN = 0.1
+LEVEL_NAMES = {1: "Low", 2: "Moderate", 3: "Considerable", 4: "High", 5: "Extreme"}
 
 
 def rating_features(band: str) -> List[str]:
@@ -361,11 +366,82 @@ def output_columns() -> List[str]:
     """
     Daily output per band: CAIC's rating for t-1, CAIC's outlook for t, the
     three probabilities with the outlook ('p_up') and from the drivers only
-    ('drivers_p_up').
+    ('drivers_p_up'), and in words what drives the drivers-only forecast ('drivers_why').
     """
     return [f"{band}_{name}" for band in BANDS
             for name in ["caic_today", "caic_outlook", *[f"p_{change}" for change in CHANGE_NAMES],
-                         *[f"drivers_p_{change}" for change in CHANGE_NAMES]]]
+                         *[f"drivers_p_{change}" for change in CHANGE_NAMES], "drivers_why"]]
+
+
+def feature_group(feature: str) -> str:
+    """The group a change-model feature is explained under."""
+    if feature.endswith("_prev") or feature.endswith("_trend"):
+        return "rating"
+    if feature.endswith("_region"):
+        return "zone storm"
+    if feature in ("HN24", "HN72", "SWE_change_24h", "SWE_change_3d"):
+        return "new snow"
+    if feature.startswith("VW"):
+        return "wind"
+    if feature.startswith("TA"):
+        return "temperature"
+    if feature.startswith("MS_"):
+        return "rain"
+    if feature == "HS_mod":
+        return "snow depth"
+    if feature == "day_of_season":
+        return "season"
+    return "stability"
+
+
+def contributions(model: ChangeModel, rows: pd.DataFrame, change: int) -> pd.DataFrame:
+    """
+    Each feature group's contribution to the log-odds of `change` against no change, per row.
+
+    The model is linear in the standardized features, so the contributions plus the intercept
+    give the log-odds exactly; zero means the group is at its training-season average.
+    """
+    imputer, scaler, logistic = model.pipeline.named_steps.values()
+    classes = list(logistic.classes_)
+    if change not in classes:
+        return pd.DataFrame(0.0, index=rows.index, columns=sorted({feature_group(c) for c in model.columns}))
+    weights = logistic.coef_[classes.index(change)] - logistic.coef_[classes.index(0)]
+    z = scaler.transform(imputer.transform(rows[model.columns]))
+    per_feature = pd.DataFrame(z * weights, index=rows.index, columns=model.columns)
+    return per_feature.T.groupby(feature_group).sum().T
+
+
+def _group_label(group: str, row: pd.Series, band: str, model: ChangeModel) -> str:
+    if group == "rating":
+        return f"today's {LEVEL_NAMES.get(int(row[f'{band}_prev']), '')} rating"
+    if group == "season":
+        scaler = model.pipeline.named_steps["standardscaler"]
+        early = row["day_of_season"] < scaler.mean_[model.columns.index("day_of_season")]
+        return "early season" if early else "late season"
+    return {"zone storm": "storm snow across the zone", "new snow": "new snow", "wind": "wind",
+            "temperature": "temperature", "rain": "rain or meltwater", "snow depth": "snow depth",
+            "stability": "snowpack stability index"}[group]
+
+
+def explain(model: ChangeModel, rows: pd.DataFrame, proba: np.ndarray) -> List[str]:
+    """
+    For each row, the drivers-only forecast's more likely change and the feature groups that
+    push it most, in words, e.g. "Down: today's High rating strongly raises it; early season lowers it".
+    """
+    texts = []
+    up_more = proba[:, CHANGES.index(1)] > proba[:, CHANGES.index(-1)]
+    by_change = {change: contributions(model, rows, change) for change in (-1, 1)}
+    for i, (index, row) in enumerate(rows.iterrows()):
+        change = 1 if up_more[i] else -1
+        groups = by_change[change].loc[index]
+        top = groups[groups.abs() >= WHY_MIN].sort_values(key=abs, ascending=False).head(WHY_TOP)
+        parts = []
+        for group, value in top.items():
+            strength = "strongly " if abs(value) >= 1.5 else "slightly " if abs(value) < 0.5 else ""
+            parts.append(f"{_group_label(group, row, model.band, model)} {strength}{'raises' if value > 0 else 'lowers'} it")
+        name = "Up" if change == 1 else "Down"
+        texts.append(f"{name}: {'; '.join(parts)}" if parts else f"{name}: no input stands out")
+    return texts
 
 
 def train() -> None:
@@ -442,8 +518,10 @@ def predict(date: pd.Timestamp, history: Optional[pd.DataFrame] = None) -> pd.Da
         rated = rows[f"{band}_prev"].notna().to_numpy()
         drivers_only = np.full((len(rows), len(CHANGES)), np.nan)
         with_outlook = np.full((len(rows), len(CHANGES)), np.nan)
+        why = np.full(len(rows), None, dtype=object)
         if rated.any():
             drivers_only[rated] = fitted["models"][band].predict_proba(rows[rated])
+            why[rated] = explain(fitted["models"][band], rows[rated], drivers_only[rated])
             if outlook_models is not None:
                 with_outlook[rated] = outlook_models[band].predict_proba(drivers_only[rated], rows[rated])
         out[f"{band}_caic_today"] = rows[f"{band}_prev"].to_numpy()
@@ -452,6 +530,7 @@ def predict(date: pd.Timestamp, history: Optional[pd.DataFrame] = None) -> pd.Da
             out[f"{band}_p_{change}"] = with_outlook[:, i]
         for i, change in enumerate(CHANGE_NAMES):
             out[f"{band}_drivers_p_{change}"] = drivers_only[:, i]
+        out[f"{band}_drivers_why"] = why
     return out[["polygon", *output_columns()]].reset_index(drop=True)
 
 

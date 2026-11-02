@@ -136,6 +136,33 @@ def test_change_model_learns_increase_from_new_snow():
     assert roc_auc_score(test["atl_change"] == 1, proba[:, 2]) > 0.9
 
 
+def test_contributions_add_up_to_the_log_odds():
+    df = hc.band_rows(_synthetic(), "atl")
+    model = hc.ChangeModel("atl", C=1.0).fit(df)
+    logistic = model.pipeline.named_steps["logisticregression"]
+    classes = list(logistic.classes_)
+
+    parts = hc.contributions(model, df, 1)
+
+    raw = model.pipeline.predict_proba(df[model.columns])
+    log_odds = np.log(raw[:, classes.index(1)] / raw[:, classes.index(0)])
+    intercept = logistic.intercept_[classes.index(1)] - logistic.intercept_[classes.index(0)]
+    np.testing.assert_allclose(parts.sum(axis=1) + intercept, log_odds, atol=1e-8)
+    assert set(parts.columns) <= {"rating", "zone storm", "new snow", "wind", "temperature", "rain",
+                                  "snow depth", "season", "stability"}
+
+
+def test_explain_names_new_snow_for_an_increase():
+    df = hc.band_rows(_synthetic(), "atl")
+    model = hc.ChangeModel("atl", C=1.0).fit(df)
+    snowy = df[df["HN24"] > 0.3].head(1)
+
+    text = hc.explain(model, snowy, model.predict_proba(snowy))[0]
+
+    assert text.startswith("Up: ") and "new snow" in text and "new snow" in text.split(";")[0]
+    assert "raises it" in text.split(";")[0]
+
+
 def test_change_model_handles_a_change_missing_from_training():
     df = hc.band_rows(_synthetic(), "atl")
     train = df[df["atl_change"] >= 0]  # no decreases
@@ -293,6 +320,7 @@ def test_predict_gives_probabilities_and_caic_ratings(tmp_path, monkeypatch):
     for prefix in ["p", "drivers_p"]:
         total = out[[f"atl_{prefix}_{c}" for c in hc.CHANGE_NAMES]].sum(axis=1).item()
         assert total == pytest.approx(1)
+    assert out["atl_drivers_why"].item().startswith(("Up: ", "Down: "))
     # The outlook calls an increase, so the probability with it is higher
     assert out["atl_p_up"].item() > out["atl_drivers_p_up"].item()
 
