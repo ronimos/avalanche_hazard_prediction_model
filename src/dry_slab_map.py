@@ -6,8 +6,8 @@ Dry Slab Map: Daily Web Map of the Avalanche Likelihood Forecast
 
 Builds the page published as next_day_prediction.html: the forecast polygons on
 a street map or satellite imagery (Leaflet), colored by the probability of a
-D2+ dry slab avalanche or by the chance that tomorrow's danger rating goes up
-or down (`hazard_change.py`), with the 80% range, snowpack context, CAIC's
+D2+ dry slab avalanche or by the forecast change in tomorrow's danger rating
+(`hazard_change.py`; hue = direction, depth = chance), with the 80% range, snowpack context, CAIC's
 ratings and outlook, and the forecast's limitations.
 
 It reads the day's predictions CSV written by predict.py, so it runs after it.

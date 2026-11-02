@@ -96,8 +96,7 @@ td.num, th.num { text-align: right; }
       <div class="control">
         <span>Danger rating</span>
         <div class="switch" role="group" aria-label="Chance the danger rating changes">
-          <button id="v-up" data-view="up" aria-pressed="false">Rating up</button>
-          <button id="v-down" data-view="down" aria-pressed="false">Rating down</button>
+          <button id="v-chg" data-view="chg" aria-pressed="false">Rating change</button>
         </div>
         <select id="band" aria-label="Elevation band">
           <option value="atl">Above treeline</option>
@@ -129,7 +128,7 @@ td.num, th.num { text-align: right; }
       </div>
       <div class="card notes">
         <h2>Danger rating change</h2>
-        <p><b>Rating up</b> and <b>Rating down</b> color the map by the chance that CAIC's rating for the selected band tomorrow is higher, or lower, than today's. Polygons CAIC didn't rate today are gray.</p>
+        <p><b>Rating change</b> colors the map by the forecast change in CAIC's rating for the selected band from today to tomorrow. The hue gives the direction: <b>blue</b> for a lower rating, <b>red</b> for a higher one. The depth of the color gives the chance of that change: the darker the polygon, the more likely the rating moves. Polygons where both chances are under 5% are pale, meaning the rating will most likely stay the same. The chances of going up and going down are rarely both large, so each polygon is colored by the larger of the two; the panel shows both. Polygons CAIC didn't rate today are gray.</p>
         <p><b>With CAIC outlook</b> (the default) combines the model with <b>CAIC's outlook</b>, the rating for tomorrow in today's forecast. It is the better probability: when the outlook shows no change, the rating changed on only 1 to 3% of polygon-days in 2025-26, and these numbers reflect that.</p>
         <p><b>Drivers only</b> is the model alone: today's rating, its change since yesterday, and the snowpack and weather forecast for tomorrow. Use it as a second opinion. Its numbers run high next to a no-change outlook, but it is better at picking out which of those days do change.</p>
         <p>The outlook part is trained on one season (2025-26). The polygon's table shows both.</p>
@@ -161,11 +160,13 @@ const DATA = __DATA__;
 const BINS = [0, 0.01, 0.02, 0.05, 0.10, 0.20, 0.35];
 const COLORS = ["#e3ebf0", "#bdd3e1", "#f2d68f", "#efa651", "#dd6a3a", "#b3332b", "#6a1424"];
 const LABELS = ["under 1%", "1–2%", "2–5%", "5–10%", "10–20%", "20–35%", "35% or more"];
-// Danger rating change layers: chance tomorrow's rating is higher (warm) or lower (cool) than today's
+// Danger rating change layer, one diverging scale: hue = direction (cool = down, warm = up),
+// depth = chance of the more likely change. Bin 0 (both under 5%) is the shared pale "likely no change".
 const CHANGE_BINS = [0, 0.05, 0.10, 0.20, 0.30, 0.50];
-const UP_COLORS = ["#e3ebf0", "#f2d68f", "#efa651", "#dd6a3a", "#b3332b", "#6a1424"];
-const DOWN_COLORS = ["#e3ebf0", "#c6dbef", "#9ecae1", "#6baed6", "#3182bd", "#08519c"];
-const CHANGE_LABELS = ["under 5%", "5–10%", "10–20%", "20–30%", "30–50%", "50% or more"];
+const NO_CHANGE = "#e3ebf0";
+const UP_COLORS = [NO_CHANGE, "#f2d68f", "#efa651", "#dd6a3a", "#b3332b", "#6a1424"];
+const DOWN_COLORS = [NO_CHANGE, "#c6dbef", "#9ecae1", "#6baed6", "#3182bd", "#08519c"];
+const CHANGE_LABELS = ["under 5%", "5–10%", "10–20%", "20–30%", "30–50%", "50%+"];
 const NO_DATA = "#9aa5ad";
 const BAND_NAMES = { atl: "Above treeline", ntl: "Near treeline", btl: "Below treeline" };
 const LEVEL_NAMES = ["", "Low", "Moderate", "Considerable", "High", "Extreme"];
@@ -175,11 +176,18 @@ const pct = v => v == null ? "n/a" : v < 0.001 ? "<0.1%" : (v * 100).toFixed(v <
 const cm = v => v == null ? "n/a" : Math.round(v * 100) + " cm";
 const level = v => v == null ? "–" : LEVEL_NAMES[Math.round(v)] || "–";
 let view = "p", band = "atl", source = "", selected = null;
-const isChange = () => view === "up" || view === "down";
-const value = props => isChange() ? props[`${band}_${source}${view[0]}`] : props[view];
-const color = v => v == null ? NO_DATA
-  : !isChange() ? COLORS[bin(v)]
-  : (view === "up" ? UP_COLORS : DOWN_COLORS)[binIn(CHANGE_BINS, v)];
+const isChange = () => view === "chg";
+// For the change layer: the more likely direction and its chance, or null if CAIC didn't rate the band
+const change = props => {
+  const up = props[`${band}_${source}u`], down = props[`${band}_${source}d`];
+  if (up == null || down == null) return null;
+  return up > down ? { dir: "up", p: up } : { dir: "down", p: down };
+};
+const color = props => {
+  if (!isChange()) { const v = props[view]; return v == null ? NO_DATA : COLORS[bin(v)]; }
+  const c = change(props);
+  return c == null ? NO_DATA : (c.dir === "up" ? UP_COLORS : DOWN_COLORS)[binIn(CHANGE_BINS, c.p)];
+};
 
 const streets = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom: 17, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' });
@@ -188,7 +196,7 @@ const satellite = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/servi
 const map = L.map("map", { layers: [streets], zoomSnap: 0.25 });
 L.control.layers({ "Street map": streets, "Satellite": satellite }).addTo(map);
 
-const style = f => ({ fillColor: color(value(f.properties)), fillOpacity: 0.6, color: "#33414c", weight: 0.8 });
+const style = f => ({ fillColor: color(f.properties), fillOpacity: 0.6, color: "#33414c", weight: 0.8 });
 const layers = new Map();
 const geo = L.geoJSON(DATA, {
   style,
@@ -233,10 +241,20 @@ function ratingTable(r) {
 }
 
 function drawLegend() {
-  const [labels, colors] = isChange() ? [CHANGE_LABELS, view === "up" ? UP_COLORS : DOWN_COLORS] : [LABELS, COLORS];
-  const keys = labels.map((l, i) => `<span class="key"><i style="background:${colors[i]}"></i>${l}</span>`);
-  if (isChange()) keys.unshift(`<span class="key">${BAND_NAMES[band]}, chance the rating goes ${view} (${source ? "drivers only" : "with CAIC outlook"}):</span>`);
-  keys.push(`<span class="key"><i style="background:${NO_DATA}"></i>${isChange() ? "not rated by CAIC" : "no data"}</span>`);
+  const key = (c, l) => `<span class="key"><i style="background:${c}"></i>${l}</span>`;
+  let keys;
+  if (isChange()) {
+    // Diverging: most likely down (darkest) ... no change ... most likely up (darkest)
+    const steps = colors => CHANGE_LABELS.slice(1).map((l, i) => key(colors[i + 1], l));
+    keys = [
+      `<span class="key">${BAND_NAMES[band]} (${source ? "drivers only" : "with CAIC outlook"}). Chance the rating goes</span>`,
+      `<span class="key"><b>down:</b></span>`, ...steps(DOWN_COLORS).reverse(),
+      key(NO_CHANGE, "both under 5%"),
+      `<span class="key"><b>up:</b></span>`, ...steps(UP_COLORS),
+      key(NO_DATA, "not rated by CAIC")];
+  } else {
+    keys = [...LABELS.map((l, i) => key(COLORS[i], l)), key(NO_DATA, "no data")];
+  }
   document.getElementById("legend").innerHTML = keys.join("");
 }
 
