@@ -3,7 +3,7 @@ import re
 
 import geopandas as gpd
 import pandas as pd
-from shapely.geometry import box
+from shapely.geometry import MultiPolygon, Point, Polygon, box
 
 import config
 import dry_slab_map as dsm
@@ -27,6 +27,7 @@ def test_map_features_carry_values_and_leave_missing_polygons_empty():
 
     first, second = (f["properties"] for f in features)
     no_change = {f"{band}_{short}": None for band in dsm.BANDS for short in [*dsm.CHANGE_FIELDS.values(), "why"]}
+    assert first.pop("label") == [39.05, -105.95]
     assert first == {"id": 1, "range": "Front Range", "region": "Front Range", "p": 0.12, "lo": 0.08, "hi": 0.17,
                      "rec": 0.01, "hs": 0.85, "hn72": 0.3, "danger": "Moderate", **no_change}
     assert second["p"] is None and second["range"] == "" and second["danger"] == "No data"
@@ -42,6 +43,13 @@ def test_map_features_carry_rating_change():
     assert (first["atl_t"], first["atl_o"], first["atl_d"], first["atl_s"], first["atl_u"]) == (3, 4, 0.05, 0.6, 0.35)
     assert first["atl_du"] == 0.5 and first["atl_why"] == "Up: new snow raises it"
     assert first["ntl_u"] is None and first["atl_dd"] is None
+
+
+def test_label_point_is_inside_a_concave_polygon_and_its_largest_part():
+    u_shape = Polygon([(0, 0), (3, 0), (3, 3), (2, 3), (2, 1), (1, 1), (1, 3), (0, 3)])
+    lat, lon = dsm.label_point(MultiPolygon([box(10, 10, 10.1, 10.1), u_shape]))
+
+    assert u_shape.contains(Point(lon, lat))
 
 
 def test_render_fills_every_placeholder():

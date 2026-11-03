@@ -26,6 +26,7 @@ from typing import Optional, Union
 
 import geopandas as gpd
 import pandas as pd
+from shapely.ops import polylabel
 
 import config
 import likelihood_data as ld
@@ -50,6 +51,13 @@ def _value(row: pd.Series, column: str, digits: int = 5) -> Optional[float]:
     return round(float(value), digits) if pd.notna(value) else None
 
 
+def label_point(geometry) -> list:
+    """[lat, lon] for the polygon's number: the point farthest inside its largest part."""
+    part = max(getattr(geometry, "geoms", [geometry]), key=lambda g: g.area)
+    point = polylabel(part, tolerance=0.002)
+    return [round(point.y, 4), round(point.x, 4)]
+
+
 def map_features(polygons: gpd.GeoDataFrame, predictions: pd.DataFrame) -> dict:
     """GeoJSON FeatureCollection of the polygons with the values the page shows."""
     merged = polygons.merge(predictions, left_on="polygon_number", right_on="polygon", how="left")
@@ -61,6 +69,7 @@ def map_features(polygons: gpd.GeoDataFrame, predictions: pd.DataFrame) -> dict:
             "geometry": row.geometry.simplify(SIMPLIFY_TOLERANCE, preserve_topology=True).__geo_interface__,
             "properties": {
                 "id": int(row["polygon_number"]),
+                "label": label_point(row.geometry),
                 "range": row.get("mountain_range") if pd.notna(row.get("mountain_range")) else "",
                 "region": row.get("referenc_region") if pd.notna(row.get("referenc_region")) else "",
                 "p": _value(row, "dry_slab_probability"),

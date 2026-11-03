@@ -73,6 +73,11 @@ th { text-align: left; font: 600 0.8rem var(--display); text-transform: uppercas
 td { padding: 6px 8px; border-bottom: 1px solid var(--line); }
 td.num, th.num { text-align: right; }
 .row { cursor: pointer; } .row:hover { background: var(--bg); }
+.plabel { font: 600 12px/14px var(--display); color: #16212a; text-align: center; white-space: nowrap; pointer-events: none;
+  text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 3px #fff; }
+#map.zoomed-out .plabel { display: none; }
+.lockline { margin-top: 2px; font-size: 0.82rem; color: var(--muted); }
+.lockline b { color: var(--accent); }
 .notes p { margin: 0 0 10px; max-width: 65ch; } .notes p:last-child { margin: 0; }
 .notes a { color: var(--accent); font-weight: 600; }
 </style>
@@ -119,7 +124,7 @@ td.num, th.num { text-align: right; }
     </div>
     <div class="detail">
       <div class="card" id="detail" aria-live="polite"></div>
-      <p class="hint">Hover or tap a polygon to see its numbers. Switch between the street map and satellite imagery with the layer button on the map.</p>
+      <p class="hint">Hover over a polygon to preview its numbers; click or tap it to keep them in this panel while you move the mouse. Click it again, click outside the polygons or press Esc to let go. Switch between the street map and satellite imagery with the layer button on the map.</p>
     </div>
   </div>
 
@@ -150,7 +155,7 @@ td.num, th.num { text-align: right; }
     </div>
     <div class="card notes">
       <h2>Danger rating change</h2>
-      <p><b>Rating change</b> colors the map by the forecast change in CAIC's rating for the selected band from today to tomorrow. The hue gives the direction: <b>blue</b> for a lower rating, <b>red</b> for a higher one. The depth of the color gives the chance of that change: the darker the polygon, the more likely the rating moves. Polygons where both chances are under 5% are pale, meaning the rating will most likely stay the same. The chances of going up and going down are rarely both large, so each polygon is colored by the larger of the two; the panel shows both. Polygons CAIC didn't rate today are gray.</p>
+      <p><b>Rating change</b> colors the map by the forecast change in CAIC's rating for the selected band from today to tomorrow. The hue gives the direction: <b>blue</b> for a lower rating, <b>orange</b> for a higher one. The depth of the color gives the chance of that change: the darker the polygon, the more likely the rating moves. Polygons where both chances are under 5% are pale, meaning the rating will most likely stay the same. The chances of going up and going down are rarely both large, so each polygon is colored by the larger of the two; the panel shows both. Polygons CAIC didn't rate today are gray.</p>
       <p><b>With CAIC outlook</b> (the default) combines the model with <b>CAIC's outlook</b>, the rating for tomorrow in today's forecast. It is the better probability: when the outlook shows no change, the rating changed on only 1 to 3% of polygon-days in 2025-26, and these numbers reflect that.</p>
       <p><b>Drivers only</b> is the model alone: today's rating, its change since yesterday, and the snowpack and weather forecast for tomorrow. Use it as a second opinion. Its numbers run high next to a no-change outlook, but it is better at picking out which of those days do change.</p>
       <p>The outlook part is trained on one season (2025-26). The polygon's table shows both.</p>
@@ -169,7 +174,7 @@ const LABELS = ["under 1%", "1–2%", "2–5%", "5–10%", "10–20%", "20–35%
 // depth = chance of the more likely change. Bin 0 (both under 5%) is the shared pale "likely no change".
 const CHANGE_BINS = [0, 0.05, 0.10, 0.20, 0.30, 0.50];
 const NO_CHANGE = "#e3ebf0";
-const UP_COLORS = [NO_CHANGE, "#f2d68f", "#efa651", "#dd6a3a", "#b3332b", "#6a1424"];
+const UP_COLORS = [NO_CHANGE, "#fdd0a2", "#fdae6b", "#fd8d3c", "#f16913", "#d94801"];
 const DOWN_COLORS = [NO_CHANGE, "#c6dbef", "#9ecae1", "#6baed6", "#3182bd", "#08519c"];
 const CHANGE_LABELS = ["under 5%", "5–10%", "10–20%", "20–30%", "30–50%", "50%+"];
 const NO_DATA = "#9aa5ad";
@@ -181,7 +186,8 @@ const pct = v => v == null ? "n/a" : v < 0.001 ? "<0.1%" : (v * 100).toFixed(v <
 const cm = v => v == null ? "n/a" : Math.round(v * 100) + " cm";
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 const level = v => v == null ? "–" : LEVEL_NAMES[Math.round(v)] || "–";
-let view = "p", band = "atl", source = "", selected = null;
+// selected = polygon shown in the panel; locked = polygon the user clicked (hover doesn't replace it)
+let view = "p", band = "atl", source = "", selected = null, locked = null;
 const isChange = () => view === "chg";
 // For the change layer: the more likely direction and its chance, or null if CAIC didn't rate the band
 const change = props => {
@@ -208,22 +214,45 @@ const geo = L.geoJSON(DATA, {
   style,
   onEachFeature: (f, layer) => {
     layers.set(f.properties.id, layer);
-    layer.on({ mouseover: () => select(f.properties.id), click: () => select(f.properties.id) });
+    layer.on({
+      mouseover: () => { if (locked == null) select(f.properties.id); },
+      click: e => { L.DomEvent.stopPropagation(e); lock(locked === f.properties.id ? null : f.properties.id); },
+    });
   },
 }).addTo(map);
 map.fitBounds(geo.getBounds(), { padding: [8, 8] });
+map.on("click", () => lock(null));
+document.addEventListener("keydown", e => { if (e.key === "Escape" && locked != null) lock(null); });
+
+// Polygon numbers at the point farthest inside each polygon; hidden when zoomed out too far to fit
+const labels = L.layerGroup(DATA.features.map(f => L.marker(f.properties.label, {
+  icon: L.divIcon({ className: "plabel", html: String(f.properties.id), iconSize: [32, 14] }),
+  interactive: false, keyboard: false })));
+labels.addTo(map);
+L.control.layers(null, { "Polygon numbers": labels }, { collapsed: false, position: "bottomleft" }).addTo(map);
+const LABEL_MIN_ZOOM = 6.75;
+const labelZoom = () => map.getContainer().classList.toggle("zoomed-out", map.getZoom() < LABEL_MIN_ZOOM);
+map.on("zoomend", labelZoom);
+labelZoom();
+
+function lock(id) {
+  locked = id;
+  if (id != null) select(id);
+  else if (selected != null) select(selected);
+}
 
 function select(id) {
   if (selected != null) geo.resetStyle(layers.get(selected));
   selected = id;
   const layer = layers.get(id), r = layer.feature.properties;
-  layer.setStyle({ weight: 3, color: "#111" });
+  layer.setStyle({ weight: locked === id ? 4 : 3, color: "#111" });
   layer.bringToFront();
   const max = Math.max(0.2, Math.ceil((r.hi ?? 0) * 10) / 10);
   const x = v => Math.min(100, ((v ?? 0) / max) * 100);
   document.getElementById("detail").innerHTML = `
     <div class="name">Polygon ${r.id}</div>
     <div class="region">${[r.range, r.region].filter(Boolean).join(" · ")}</div>
+    <div class="lockline">${locked === id ? "<b>Locked.</b> Click it again, outside the polygons or press Esc to let go." : "Click the polygon to lock this panel."}</div>
     <div class="big">${pct(r.p)}</div>
     <div class="range">80% range ${pct(r.lo)} to ${pct(r.hi)}</div>
     <div class="bar" aria-hidden="true"><span style="left:${x(r.lo)}%;width:${Math.max(0.8, x(r.hi) - x(r.lo))}%"></span><b style="left:calc(${x(r.p)}% - 1px)"></b></div>
@@ -291,7 +320,7 @@ const ranked = DATA.features.map(f => f.properties).filter(r => r.p != null).sor
 document.getElementById("top").innerHTML = ranked.map(r =>
   `<tr class="row" tabindex="0" data-id="${r.id}"><td>${r.id}</td><td>${r.region}</td><td class="num">${pct(r.p)}</td><td class="num">${pct(r.lo)}–${pct(r.hi)}</td><td class="num">${cm(r.hs)}</td></tr>`).join("");
 document.querySelectorAll(".row").forEach(tr => {
-  const go = () => { const id = Number(tr.dataset.id); select(id); map.fitBounds(layers.get(id).getBounds(), { maxZoom: 10 }); };
+  const go = () => { const id = Number(tr.dataset.id); lock(id); map.fitBounds(layers.get(id).getBounds(), { maxZoom: 10 }); };
   tr.addEventListener("click", go);
   tr.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
 });
