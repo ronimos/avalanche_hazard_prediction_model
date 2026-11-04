@@ -352,6 +352,21 @@ In practice:
 - **Comparing polygons and reading absolute percentages** does. A quiet polygon's probability is what the busiest polygons would record under the same snowpack, including their traffic. Its own number of avalanches may be lower, for example where there is less avalanche terrain or fewer people to trigger slopes.
 - The 80% interval covers the model's statistical uncertainty, not this assumption.
 
+### Natural only
+
+Forecasters asked for natural avalanches separately from natural or triggered, since the equal-rate assumption above fits naturals better. A second model, identical to the operational one (drivers only, Bayesian, fit on all three seasons), uses the label `natural_dry_slab`: a polygon-day with at least one D2+ dry slab record whose trigger is natural (N). Records with an unknown trigger count as no natural event. The label has 444/333/190 record-days in seasons 2023/24/25, against 688/525/292 for all dry slab, in 83 polygons. Only about 5% of natural D2+ dry slab records have a known date (59% of triggered ones), because most naturals are found after the fact, so its day labels are fuzzier.
+
+Held-out results on natural labels (seasons 2023 / 2024 / 2025):
+
+| Model | Within-polygon AUC | Average precision |
+|---|---|---|
+| Climatology | .728 / .724 / .836 | .118 / .121 / .145 |
+| Driver logistic, natural label | .829 / .829 / .919 | .228 / .233 / .312 |
+| Bayesian, natural label | .827 / .827 / .911 | .216 / .244 / .297 |
+| Operational model (natural or triggered), scored on natural labels | .829 / .824 / .906 | .209 / .220 / .288 |
+
+The natural model ranks polygon-days almost exactly as the operational model does (Spearman 0.98 in every season; on a typical day about 8 of the 10 highest polygons are the same). Its gain on natural days is a little average precision, mostly in 2024, and none in within-polygon AUC. Driver effects differ by at most 0.26 (minimum snow grain size and 3-day SWE change), within one posterior standard deviation. The main difference is the level: natural-only probabilities are about two-thirds of natural or triggered. The map offers it as **Natural only**, with a note that it is mainly a lower level, not a different pattern. The model is `artifacts/natural_likelihood_model.joblib` (`likelihood_forecast.py --train --label natural_dry_slab`); without it the natural fields are left out.
+
 ### Limitations of the forecast
 
 What the forecast can and can't say, in order of how much each limits its use:

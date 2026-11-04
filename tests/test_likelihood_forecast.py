@@ -47,6 +47,7 @@ def test_predict_returns_occurrence_probability_interval_and_record_probability(
     path = tmp_path / "likelihood_model.joblib"
     joblib.dump(FixedModel(), path)
     monkeypatch.setitem(config.PATHS["ARTIFACTS"], "likelihood_model", path)
+    monkeypatch.setitem(config.PATHS["ARTIFACTS"], "natural_likelihood_model", tmp_path / "missing.joblib")
     monkeypatch.setattr(lf.sd, "build_driver_table", lambda seasons: _season_drivers(last_day=("2026-12-16", "2026-12-16")))
 
     out = lf.predict(pd.Timestamp("2026-12-15"))
@@ -57,3 +58,16 @@ def test_predict_returns_occurrence_probability_interval_and_record_probability(
     assert (out["dry_slab_probability"] < out["dry_slab_probability_q90"]).all()
     # Occurrence, not the lower probability that an avalanche is also recorded
     assert (out["dry_slab_record_probability"] < out["dry_slab_probability"]).all()
+
+
+def test_predict_adds_natural_columns_when_that_model_exists(monkeypatch, tmp_path):
+    for key in ["likelihood_model", "natural_likelihood_model"]:
+        joblib.dump(FixedModel(), tmp_path / f"{key}.joblib")
+        monkeypatch.setitem(config.PATHS["ARTIFACTS"], key, tmp_path / f"{key}.joblib")
+    monkeypatch.setattr(lf.sd, "build_driver_table", lambda seasons: _season_drivers(last_day=("2026-12-16", "2026-12-16")))
+    lf._FORECAST_TABLES.clear()
+
+    out = lf.predict(pd.Timestamp("2026-12-15"))
+
+    assert list(out.columns) == ["polygon", *lf.OUTPUT_COLUMNS.values(), *lf.SNOW_COLUMNS.values(), *lf.NATURAL_COLUMNS.values()]
+    assert out["natural_dry_slab_probability"].tolist() == [0.3, 0.3]

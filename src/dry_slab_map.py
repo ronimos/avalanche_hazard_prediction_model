@@ -6,7 +6,7 @@ Dry Slab Map: Daily Web Map of the Avalanche Likelihood Forecast
 
 Builds the page published as next_day_prediction.html: the forecast polygons on
 a street map or satellite imagery (Leaflet), colored by the probability of a
-D2+ dry slab avalanche or by the forecast change in tomorrow's danger rating
+D2+ dry slab avalanche (natural or triggered, or natural only) or by the forecast change in tomorrow's danger rating
 (`hazard_change.py`; hue = direction, depth = chance), with the 80% range, snowpack context, CAIC's
 ratings and outlook, and the forecast's limitations.
 
@@ -76,6 +76,11 @@ def map_features(polygons: gpd.GeoDataFrame, predictions: pd.DataFrame) -> dict:
                 "lo": _value(row, "dry_slab_probability_q10"),
                 "hi": _value(row, "dry_slab_probability_q90"),
                 "rec": _value(row, "dry_slab_record_probability"),
+                # Natural releases only (None until that model is trained)
+                "np": _value(row, "natural_dry_slab_probability"),
+                "nlo": _value(row, "natural_dry_slab_probability_q10"),
+                "nhi": _value(row, "natural_dry_slab_probability_q90"),
+                "nrec": _value(row, "natural_dry_slab_record_probability"),
                 "hs": _value(row, "snow_depth_m", 3),
                 "hn72": _value(row, "new_snow_72h_m", 3),
                 "danger": DANGER_LEVELS.get(int(danger), "No data") if pd.notna(danger) else "No data",

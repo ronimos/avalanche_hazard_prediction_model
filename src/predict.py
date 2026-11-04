@@ -173,7 +173,8 @@ def predict_avalanche_hazards(prediction_date: Union[str, datetime]) -> None:
             import likelihood_forecast
             likelihood = likelihood_forecast.predict(pd.Timestamp(prediction_date))
             final_predictions_df = final_predictions_df.merge(likelihood, on='polygon', how='left')
-            likelihood_cols = list(likelihood_forecast.OUTPUT_COLUMNS.values())
+            likelihood_cols = [c for cols in (likelihood_forecast.OUTPUT_COLUMNS, likelihood_forecast.NATURAL_COLUMNS)
+                               for c in cols.values() if c in likelihood.columns]
         except Exception as e:
             logging.error(f"Dry slab likelihood prediction failed; saving predictions without it: {e}", exc_info=True)
 

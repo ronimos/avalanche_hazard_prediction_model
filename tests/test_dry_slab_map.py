@@ -29,8 +29,17 @@ def test_map_features_carry_values_and_leave_missing_polygons_empty():
     no_change = {f"{band}_{short}": None for band in dsm.BANDS for short in [*dsm.CHANGE_FIELDS.values(), "why"]}
     assert first.pop("label") == [39.05, -105.95]
     assert first == {"id": 1, "range": "Front Range", "region": "Front Range", "p": 0.12, "lo": 0.08, "hi": 0.17,
-                     "rec": 0.01, "hs": 0.85, "hn72": 0.3, "danger": "Moderate", **no_change}
+                     "rec": 0.01, "np": None, "nlo": None, "nhi": None, "nrec": None, "hs": 0.85, "hn72": 0.3, "danger": "Moderate", **no_change}
     assert second["p"] is None and second["range"] == "" and second["danger"] == "No data"
+
+
+def test_map_features_carry_natural_only_probability():
+    predictions = _predictions().assign(natural_dry_slab_probability=0.07, natural_dry_slab_probability_q10=0.04,
+                                        natural_dry_slab_probability_q90=0.11, natural_dry_slab_record_probability=0.005)
+
+    first = dsm.map_features(_polygons(), predictions)["features"][0]["properties"]
+
+    assert (first["np"], first["nlo"], first["nhi"], first["nrec"]) == (0.07, 0.04, 0.11, 0.005)
 
 
 def test_map_features_carry_rating_change():

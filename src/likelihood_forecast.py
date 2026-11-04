@@ -20,12 +20,18 @@ near-fully reported, set the level for all of them; the interval doesn't cover
 that assumption (see docs/methods.md). The probability that one is recorded is
 also given, since it is the part that can be checked against the records.
 
+A second model, fit the same way on natural releases only (trigger 'N'), gives
+the same numbers for natural D2+ dry slabs. The equal-rate assumption fits it
+better, since triggered avalanches also depend on traffic. It is added to the
+output when its artifact exists.
+
 Drivers for the forecast day come from the current season's SNOWPACK run
 (SNOWPACK_DATA_ROOT). The run ends partway through its last day, so a day is
 used only when the run continues past it.
 
 Usage:
     python likelihood_forecast.py --train
+    python likelihood_forecast.py --train --label natural_dry_slab
     python likelihood_forecast.py --date 2026-12-15
 
 Author: Ron Simenhois
@@ -53,6 +59,20 @@ OUTPUT_COLUMNS = {
     "p_record": "dry_slab_record_probability",
 }
 
+# Natural-only model: posterior summary -> output column
+NATURAL_COLUMNS = {
+    "p_occurrence": "natural_dry_slab_probability",
+    "p_occurrence_q10": "natural_dry_slab_probability_q10",
+    "p_occurrence_q90": "natural_dry_slab_probability_q90",
+    "p_record": "natural_dry_slab_record_probability",
+}
+
+# Label -> artifact key and output columns
+MODELS = {
+    "dry_slab": ("likelihood_model", OUTPUT_COLUMNS),
+    "natural_dry_slab": ("natural_likelihood_model", NATURAL_COLUMNS),
+}
+
 # Snowpack context for the map (CSV only), driver -> output column
 SNOW_COLUMNS = {"HS_mod": "snow_depth_m", "HN72": "new_snow_72h_m"}
 
@@ -62,18 +82,18 @@ def season_of(date: pd.Timestamp) -> int:
     return date.year if date.month >= 10 else date.year - 1
 
 
-def train() -> None:
-    """Fits the operational model on every season in the modeling table and saves it."""
+def train(label: str = ld.DEFAULT_LABEL) -> None:
+    """Fits the operational model for one label (a key of MODELS) on every season and saves it."""
     import bayes_model
 
-    table = ld.load_modeling_table()
+    table = ld.load_modeling_table(label)
     model = bayes_model.OccupancyDetectionModel(drivers=ld.DRIVERS, draws=TRAIN_DRAWS, tune=TRAIN_TUNE).fit(table)
     # The posterior draws used for prediction are kept; the full trace isn't needed
     model.idata = None
-    path = config.PATHS["ARTIFACTS"]["likelihood_model"]
+    path = config.PATHS["ARTIFACTS"][MODELS[label][0]]
     path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(model, path)
-    logging.info(f"Likelihood model trained on seasons {list(model._seasons)} and saved to '{path}'.")
+    logging.info(f"Likelihood model ({label}) trained on seasons {list(model._seasons)} and saved to '{path}'.")
 
 
 # Forecast tables already built in this run, by day; building one takes about 2 minutes
@@ -112,7 +132,8 @@ def predict(date: pd.Timestamp) -> pd.DataFrame:
         date (pd.Timestamp): Forecast day (local date).
 
     Returns:
-        pd.DataFrame: 'polygon' plus the OUTPUT_COLUMNS and SNOW_COLUMNS.
+        pd.DataFrame: 'polygon' plus the OUTPUT_COLUMNS and SNOW_COLUMNS, and the
+                      NATURAL_COLUMNS when the natural-only model has been trained.
     """
     model = joblib.load(config.PATHS["ARTIFACTS"]["likelihood_model"])
     if date.month not in ld.SEASON_MONTHS:
@@ -124,8 +145,15 @@ def predict(date: pd.Timestamp) -> pd.DataFrame:
     if table.empty:
         return pd.DataFrame(columns=["polygon", *OUTPUT_COLUMNS.values(), *SNOW_COLUMNS.values()])
     summary = model.predict_interval(table, quantiles=(0.1, 0.9))
-    return pd.concat([table[["polygon"]], summary[list(OUTPUT_COLUMNS)].rename(columns=OUTPUT_COLUMNS),
-                      table[list(SNOW_COLUMNS)].rename(columns=SNOW_COLUMNS)], axis=1)
+    parts = [table[["polygon"]], summary[list(OUTPUT_COLUMNS)].rename(columns=OUTPUT_COLUMNS),
+             table[list(SNOW_COLUMNS)].rename(columns=SNOW_COLUMNS)]
+    natural_path = config.PATHS["ARTIFACTS"]["natural_likelihood_model"]
+    if natural_path.exists():
+        natural = joblib.load(natural_path).predict_interval(table, quantiles=(0.1, 0.9))
+        parts.append(natural[list(NATURAL_COLUMNS)].rename(columns=NATURAL_COLUMNS))
+    else:
+        logging.info(f"No natural-only likelihood model at '{natural_path}'; natural columns left out.")
+    return pd.concat(parts, axis=1)
 
 
 def main() -> None:
@@ -133,10 +161,11 @@ def main() -> None:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--train", action="store_true", help="Fit on all seasons in the modeling table and save the model.")
     group.add_argument("--date", type=str, help="Forecast day, YYYY-MM-DD.")
+    parser.add_argument("--label", choices=sorted(MODELS), default=ld.DEFAULT_LABEL, help="Model to train.")
     args = parser.parse_args()
 
     if args.train:
-        train()
+        train(args.label)
     else:
         print(predict(pd.Timestamp(datetime.strptime(args.date, "%Y-%m-%d"))).round(4).to_string(index=False))
 

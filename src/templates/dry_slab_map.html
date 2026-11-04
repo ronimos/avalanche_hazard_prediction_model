@@ -98,6 +98,10 @@ td.num, th.num { text-align: right; }
           <button id="v-lo" data-view="lo" aria-pressed="false">Low end</button>
           <button id="v-hi" data-view="hi" aria-pressed="false">High end</button>
         </div>
+        <select id="trigger" aria-label="Which avalanches count">
+          <option value="">Natural or triggered</option>
+          <option value="n">Natural only</option>
+        </select>
       </div>
       <div class="control">
         <span>Danger rating</span>
@@ -130,7 +134,7 @@ td.num, th.num { text-align: right; }
 
   <div class="lower">
     <div class="card tablebox">
-      <h2>Highest probabilities</h2>
+      <h2 id="toptitle">Highest probabilities</h2>
       <table>
         <thead><tr><th>Polygon</th><th>Region</th><th class="num">Probability</th><th class="num">80% range</th><th class="num">Snow depth</th></tr></thead>
         <tbody id="top"></tbody>
@@ -140,6 +144,7 @@ td.num, th.num { text-align: right; }
       <h2>Reading the numbers</h2>
       <p>Each value is the probability of at least one D2 or larger dry slab avalanche in the polygon that day, natural or triggered, whether or not anyone reports it, at the activity and observation level of the most closely watched polygons. Wet avalanches are not included.</p>
       <p>The model assumes every polygon produces avalanches at the same rate under the same snowpack. That holds best for natural avalanches; triggered ones also depend on traffic, which isn't measured. A quiet polygon's own number of avalanches may be lower than its value here. Rank days within a polygon with confidence; compare polygons with care.</p>
+      <p><b>Natural only</b>, in the menu next to the buttons, switches the map, the panel and this table to a second model fit the same way on natural releases only. It is the probability of at least one natural D2+ dry slab avalanche in the polygon that day. The equal-rate assumption fits it better, so its numbers compare across polygons with more confidence. Most natural avalanches are found after the fact with an estimated date, so its day-to-day timing is less sharp. In held-out seasons the two models rank polygon-days almost the same (rank correlation 0.98; about 8 of the top 10 polygons match on a typical day), and natural only predicts natural days barely better than natural or triggered does. Read it mainly as a lower level, about two-thirds of natural or triggered, not as a different picture of where it's dangerous. The two models are fit separately, so in a few polygons natural only can come out slightly above natural or triggered.</p>
       <p>The 80% range covers the model's statistical uncertainty, not that assumption.__SEASON_NOTE__</p>
       <p><a href="__METHODS_URL__" target="_blank" rel="noopener">Methods: what the probability means and its limitations</a></p>
     </div>
@@ -187,7 +192,11 @@ const cm = v => v == null ? "n/a" : Math.round(v * 100) + " cm";
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 const level = v => v == null ? "–" : LEVEL_NAMES[Math.round(v)] || "–";
 // selected = polygon shown in the panel; locked = polygon the user clicked (hover doesn't replace it)
-let view = "p", band = "atl", source = "", selected = null, locked = null;
+let view = "p", band = "atl", source = "", trigger = "", selected = null, locked = null;
+const HAS_NATURAL = DATA.features.some(f => f.properties.np != null);
+const TRIGGER_NAMES = { "": "natural or triggered", n: "natural only" };
+// Dry slab value for the selected trigger: key "p"/"lo"/"hi"/"rec", or "np"/"nlo"/... for natural only
+const dry = (r, key) => r[trigger + key];
 const isChange = () => view === "chg";
 // For the change layer: the more likely direction and its chance, or null if CAIC didn't rate the band
 const change = props => {
@@ -196,7 +205,7 @@ const change = props => {
   return up > down ? { dir: "up", p: up } : { dir: "down", p: down };
 };
 const color = props => {
-  if (!isChange()) { const v = props[view]; return v == null ? NO_DATA : COLORS[bin(v)]; }
+  if (!isChange()) { const v = dry(props, view); return v == null ? NO_DATA : COLORS[bin(v)]; }
   const c = change(props);
   return c == null ? NO_DATA : (c.dir === "up" ? UP_COLORS : DOWN_COLORS)[binIn(CHANGE_BINS, c.p)];
 };
@@ -247,18 +256,21 @@ function select(id) {
   const layer = layers.get(id), r = layer.feature.properties;
   layer.setStyle({ weight: locked === id ? 4 : 3, color: "#111" });
   layer.bringToFront();
-  const max = Math.max(0.2, Math.ceil((r.hi ?? 0) * 10) / 10);
+  const p = dry(r, "p"), lo = dry(r, "lo"), hi = dry(r, "hi");
+  const other = trigger ? "" : "n";
+  const max = Math.max(0.2, Math.ceil((hi ?? 0) * 10) / 10);
   const x = v => Math.min(100, ((v ?? 0) / max) * 100);
   document.getElementById("detail").innerHTML = `
     <div class="name">Polygon ${r.id}</div>
     <div class="region">${[r.range, r.region].filter(Boolean).join(" · ")}</div>
     <div class="lockline">${locked === id ? "<b>Locked.</b> Click it again, outside the polygons or press Esc to let go." : "Click the polygon to lock this panel."}</div>
-    <div class="big">${pct(r.p)}</div>
-    <div class="range">80% range ${pct(r.lo)} to ${pct(r.hi)}</div>
-    <div class="bar" aria-hidden="true"><span style="left:${x(r.lo)}%;width:${Math.max(0.8, x(r.hi) - x(r.lo))}%"></span><b style="left:calc(${x(r.p)}% - 1px)"></b></div>
+    <div class="big">${pct(p)}</div>
+    <div class="range">D2+ dry slab, ${TRIGGER_NAMES[trigger]} · 80% range ${pct(lo)} to ${pct(hi)}</div>
+    <div class="bar" aria-hidden="true"><span style="left:${x(lo)}%;width:${Math.max(0.8, x(hi) - x(lo))}%"></span><b style="left:calc(${x(p)}% - 1px)"></b></div>
     <div class="barscale" aria-hidden="true"><span>0%</span><span>${Math.round(max * 100)}%</span></div>
     <dl>
-      <dt>Probability one is also recorded</dt><dd>${pct(r.rec)}</dd>
+      <dt>Probability one is also recorded</dt><dd>${pct(dry(r, "rec"))}</dd>
+      ${HAS_NATURAL ? `<dt>${TRIGGER_NAMES[other][0].toUpperCase() + TRIGGER_NAMES[other].slice(1)}</dt><dd>${pct(r[other + "p"])} (${pct(r[other + "lo"])}–${pct(r[other + "hi"])})</dd>` : ""}
       <dt>Modeled snow depth</dt><dd>${cm(r.hs)}</dd>
       <dt>New snow, 72 h</dt><dd>${cm(r.hn72)}</dd>
       <dt>Danger rating model</dt><dd>${r.danger}</dd>
@@ -289,7 +301,7 @@ function drawLegend() {
       `<span class="key"><b>up:</b></span>`, ...steps(UP_COLORS),
       key(NO_DATA, "not rated by CAIC")];
   } else {
-    keys = [...LABELS.map((l, i) => key(COLORS[i], l)), key(NO_DATA, "no data")];
+    keys = [`<span class="key">D2+ dry slab, ${TRIGGER_NAMES[trigger]}:</span>`, ...LABELS.map((l, i) => key(COLORS[i], l)), key(NO_DATA, "no data")];
   }
   document.getElementById("legend").innerHTML = keys.join("");
 }
@@ -313,18 +325,34 @@ document.getElementById("source").addEventListener("change", e => {
   source = e.target.value;
   if (isChange()) redraw();
 });
-
-drawLegend();
-
-const ranked = DATA.features.map(f => f.properties).filter(r => r.p != null).sort((a, b) => b.p - a.p).slice(0, 10);
-document.getElementById("top").innerHTML = ranked.map(r =>
-  `<tr class="row" tabindex="0" data-id="${r.id}"><td>${r.id}</td><td>${r.region}</td><td class="num">${pct(r.p)}</td><td class="num">${pct(r.lo)}–${pct(r.hi)}</td><td class="num">${cm(r.hs)}</td></tr>`).join("");
-document.querySelectorAll(".row").forEach(tr => {
-  const go = () => { const id = Number(tr.dataset.id); lock(id); map.fitBounds(layers.get(id).getBounds(), { maxZoom: 10 }); };
-  tr.addEventListener("click", go);
-  tr.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+const triggerMenu = document.getElementById("trigger");
+if (!HAS_NATURAL) triggerMenu.hidden = true;
+triggerMenu.addEventListener("change", e => {
+  trigger = e.target.value;
+  // Choosing a trigger means looking at the dry slab layer
+  if (isChange()) { view = "p"; document.querySelectorAll(".switch button").forEach(o => o.setAttribute("aria-pressed", String(o.dataset.view === "p"))); }
+  redraw();
+  drawTop();
 });
 
+function ranking() {
+  return DATA.features.map(f => f.properties).filter(r => dry(r, "p") != null).sort((a, b) => dry(b, "p") - dry(a, "p")).slice(0, 10);
+}
+
+function drawTop() {
+  document.getElementById("toptitle").textContent = trigger ? "Highest probabilities, natural only" : "Highest probabilities";
+  document.getElementById("top").innerHTML = ranking().map(r =>
+    `<tr class="row" tabindex="0" data-id="${r.id}"><td>${r.id}</td><td>${r.region}</td><td class="num">${pct(dry(r, "p"))}</td><td class="num">${pct(dry(r, "lo"))}–${pct(dry(r, "hi"))}</td><td class="num">${cm(r.hs)}</td></tr>`).join("");
+  document.querySelectorAll(".row").forEach(tr => {
+    const go = () => { const id = Number(tr.dataset.id); lock(id); map.fitBounds(layers.get(id).getBounds(), { maxZoom: 10 }); };
+    tr.addEventListener("click", go);
+    tr.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+  });
+}
+
+drawLegend();
+drawTop();
+const ranked = ranking();
 if (ranked.length) select(ranked[0].id);
 })();
 </script>

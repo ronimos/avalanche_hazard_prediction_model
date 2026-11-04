@@ -82,5 +82,7 @@ def test_daily_activity_counts(records_csv, polygons_geojson):
     assert daily.loc[1, "natural_avalanches"] == 3
     assert daily.loc[1, "d2plus_avalanches"] == 6
     assert daily.loc[1, "dry_slab_d2plus_avalanches"] == 4
+    # The triggered slab (AS) and the natural wet slab don't count
+    assert daily.loc[1, "natural_dry_slab_d2plus_avalanches"] == 1
     assert daily.loc[2, "dry_slab_d2plus_avalanches"] == 0
     assert daily.loc[2, "d2plus_avalanches"] == 0

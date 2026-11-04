@@ -42,6 +42,8 @@ STABILITY_CAP = 6.0
 # Label name -> activity column whose count must be positive
 LABELS = {
     "dry_slab": "dry_slab_d2plus_avalanches",
+    # Trigger 'N' only; records with an unknown trigger count as no natural event
+    "natural_dry_slab": "natural_dry_slab_d2plus_avalanches",
     "d2plus": "d2plus_avalanches",
     "natural": "natural_avalanches",
     "any": "n_avalanches",
