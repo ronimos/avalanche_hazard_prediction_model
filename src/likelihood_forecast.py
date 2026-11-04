@@ -150,7 +150,13 @@ def predict(date: pd.Timestamp) -> pd.DataFrame:
     natural_path = config.PATHS["ARTIFACTS"]["natural_likelihood_model"]
     if natural_path.exists():
         natural = joblib.load(natural_path).predict_interval(table, quantiles=(0.1, 0.9))
-        parts.append(natural[list(NATURAL_COLUMNS)].rename(columns=NATURAL_COLUMNS))
+        natural = natural[list(NATURAL_COLUMNS)].rename(columns=NATURAL_COLUMNS)
+        # The two models are fit separately, so a polygon whose few events were all
+        # natural can come out higher on the natural one. Natural releases are a
+        # subset of all releases, so each natural value is capped at its all-trigger match.
+        for key, column in NATURAL_COLUMNS.items():
+            natural[column] = natural[column].clip(upper=summary[key])
+        parts.append(natural)
     else:
         logging.info(f"No natural-only likelihood model at '{natural_path}'; natural columns left out.")
     return pd.concat(parts, axis=1)

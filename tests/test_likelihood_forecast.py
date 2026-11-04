@@ -71,3 +71,23 @@ def test_predict_adds_natural_columns_when_that_model_exists(monkeypatch, tmp_pa
 
     assert list(out.columns) == ["polygon", *lf.OUTPUT_COLUMNS.values(), *lf.SNOW_COLUMNS.values(), *lf.NATURAL_COLUMNS.values()]
     assert out["natural_dry_slab_probability"].tolist() == [0.3, 0.3]
+
+
+class HigherModel(FixedModel):
+    """Natural-only stub that comes out above the all-trigger stub on every value."""
+
+    def predict_interval(self, df, quantiles):
+        return super().predict_interval(df, quantiles) * 1.2
+
+
+def test_predict_caps_natural_columns_at_the_all_trigger_values(monkeypatch, tmp_path):
+    for key, model in [("likelihood_model", FixedModel()), ("natural_likelihood_model", HigherModel())]:
+        joblib.dump(model, tmp_path / f"{key}.joblib")
+        monkeypatch.setitem(config.PATHS["ARTIFACTS"], key, tmp_path / f"{key}.joblib")
+    monkeypatch.setattr(lf.sd, "build_driver_table", lambda seasons: _season_drivers(last_day=("2026-12-16", "2026-12-16")))
+    lf._FORECAST_TABLES.clear()
+
+    out = lf.predict(pd.Timestamp("2026-12-15"))
+
+    for key, column in lf.NATURAL_COLUMNS.items():
+        assert (out[column] <= out[lf.OUTPUT_COLUMNS[key]]).all()
