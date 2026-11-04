@@ -71,6 +71,15 @@ def weekend_or_holiday(dates: pd.Series) -> np.ndarray:
     return (dates.dt.day_of_week.ge(5) | dates.isin(holidays) | winter_break).astype(int).to_numpy()
 
 
+def summarize_draws(record: np.ndarray, occurrence: np.ndarray, index: pd.Index, quantiles=(0.1, 0.5, 0.9)) -> pd.DataFrame:
+    """Posterior mean and quantiles of record and occurrence draws (draws, rows), one row per polygon-day."""
+    out = {"p_record": record.mean(axis=0), "p_occurrence": occurrence.mean(axis=0)}
+    for q in quantiles:
+        out[f"p_record_q{int(q * 100):02d}"] = np.quantile(record, q, axis=0)
+        out[f"p_occurrence_q{int(q * 100):02d}"] = np.quantile(occurrence, q, axis=0)
+    return pd.DataFrame(out, index=index)
+
+
 class OccupancyDetectionModel:
     """Hierarchical occupancy-detection model fit with NUTS (PyMC + NumPyro)."""
 
@@ -233,12 +242,7 @@ class OccupancyDetectionModel:
 
     def predict_interval(self, df: pd.DataFrame, quantiles=(0.1, 0.5, 0.9)) -> pd.DataFrame:
         """Posterior mean and quantiles of the record and occurrence probabilities, one row per polygon-day."""
-        record, occurrence = self.predict_draws(df)
-        out = {"p_record": record.mean(axis=0), "p_occurrence": occurrence.mean(axis=0)}
-        for q in quantiles:
-            out[f"p_record_q{int(q * 100):02d}"] = np.quantile(record, q, axis=0)
-            out[f"p_occurrence_q{int(q * 100):02d}"] = np.quantile(occurrence, q, axis=0)
-        return pd.DataFrame(out, index=df.index)
+        return summarize_draws(*self.predict_draws(df), df.index, quantiles)
 
     def simulate_records(self, df: pd.DataFrame, group: np.ndarray, n_groups: int) -> np.ndarray:
         """

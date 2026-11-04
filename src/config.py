@@ -144,7 +144,8 @@ PATHS = {
         "hazard_scaler": ARTIFACTS_DIR / "hazard_scaler.joblib",
         "hazard_calibrators": ARTIFACTS_DIR / "hazard_calibrators.joblib",
         "likelihood_model": ARTIFACTS_DIR / "likelihood_model.joblib",
-        "natural_likelihood_model": ARTIFACTS_DIR / "natural_likelihood_model.joblib",
+        # Natural share of dry slab releases; natural only = likelihood_model x this
+        "natural_share_model": ARTIFACTS_DIR / "natural_share_model.joblib",
         "hazard_change_model": ARTIFACTS_DIR / "hazard_change_model.joblib",
         
         # --- Feature Lists & Params ---

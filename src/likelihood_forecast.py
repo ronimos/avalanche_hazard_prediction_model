@@ -20,10 +20,10 @@ near-fully reported, set the level for all of them; the interval doesn't cover
 that assumption (see docs/methods.md). The probability that one is recorded is
 also given, since it is the part that can be checked against the records.
 
-A second model, fit the same way on natural releases only (trigger 'N'), gives
-the same numbers for natural D2+ dry slabs. The equal-rate assumption fits it
-better, since triggered avalanches also depend on traffic. It is added to the
-output when its artifact exists.
+The same numbers for natural D2+ dry slabs (trigger 'N') are the all-trigger
+draws times the natural share of releases (`natural_share.py`), so they can
+never exceed natural or triggered. They are added to the output when the share
+model's artifact exists.
 
 Drivers for the forecast day come from the current season's SNOWPACK run
 (SNOWPACK_DATA_ROOT). The run ends partway through its last day, so a day is
@@ -43,6 +43,7 @@ from datetime import datetime
 import joblib
 import pandas as pd
 
+import bayes_model
 import config
 import likelihood_data as ld
 import snowpack_drivers as sd
@@ -59,7 +60,7 @@ OUTPUT_COLUMNS = {
     "p_record": "dry_slab_record_probability",
 }
 
-# Natural-only model: posterior summary -> output column
+# Natural only (all-trigger model times natural share): posterior summary -> output column
 NATURAL_COLUMNS = {
     "p_occurrence": "natural_dry_slab_probability",
     "p_occurrence_q10": "natural_dry_slab_probability_q10",
@@ -67,10 +68,10 @@ NATURAL_COLUMNS = {
     "p_record": "natural_dry_slab_record_probability",
 }
 
-# Label -> artifact key and output columns
+# Label -> artifact key of the model trained for it
 MODELS = {
-    "dry_slab": ("likelihood_model", OUTPUT_COLUMNS),
-    "natural_dry_slab": ("natural_likelihood_model", NATURAL_COLUMNS),
+    "dry_slab": "likelihood_model",
+    "natural_dry_slab": "natural_share_model",
 }
 
 # Snowpack context for the map (CSV only), driver -> output column
@@ -83,17 +84,23 @@ def season_of(date: pd.Timestamp) -> int:
 
 
 def train(label: str = ld.DEFAULT_LABEL) -> None:
-    """Fits the operational model for one label (a key of MODELS) on every season and saves it."""
-    import bayes_model
+    """
+    Fits the operational model for one label (a key of MODELS) on every season and saves it:
+    the occupancy-detection model for 'dry_slab', the natural share for 'natural_dry_slab'.
+    """
+    if label == "natural_dry_slab":
+        import natural_share
 
-    table = ld.load_modeling_table(label)
-    model = bayes_model.OccupancyDetectionModel(drivers=ld.DRIVERS, draws=TRAIN_DRAWS, tune=TRAIN_TUNE).fit(table)
-    # The posterior draws used for prediction are kept; the full trace isn't needed
-    model.idata = None
-    path = config.PATHS["ARTIFACTS"][MODELS[label][0]]
+        model = natural_share.NaturalShareModel().fit(natural_share.event_table())
+    else:
+        table = ld.load_modeling_table(label)
+        model = bayes_model.OccupancyDetectionModel(drivers=ld.DRIVERS, draws=TRAIN_DRAWS, tune=TRAIN_TUNE).fit(table)
+        # The posterior draws used for prediction are kept; the full trace isn't needed
+        model.idata = None
+    path = config.PATHS["ARTIFACTS"][MODELS[label]]
     path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(model, path)
-    logging.info(f"Likelihood model ({label}) trained on seasons {list(model._seasons)} and saved to '{path}'.")
+    logging.info(f"Likelihood model ({label}) trained and saved to '{path}'.")
 
 
 # Forecast tables already built in this run, by day; building one takes about 2 minutes
@@ -133,7 +140,7 @@ def predict(date: pd.Timestamp) -> pd.DataFrame:
 
     Returns:
         pd.DataFrame: 'polygon' plus the OUTPUT_COLUMNS and SNOW_COLUMNS, and the
-                      NATURAL_COLUMNS when the natural-only model has been trained.
+                      NATURAL_COLUMNS when the natural share model has been trained.
     """
     model = joblib.load(config.PATHS["ARTIFACTS"]["likelihood_model"])
     if date.month not in ld.SEASON_MONTHS:
@@ -144,21 +151,18 @@ def predict(date: pd.Timestamp) -> pd.DataFrame:
         logging.warning(f"No complete drivers for {date.date()} in {len(missing)} polygons: {missing}")
     if table.empty:
         return pd.DataFrame(columns=["polygon", *OUTPUT_COLUMNS.values(), *SNOW_COLUMNS.values()])
-    summary = model.predict_interval(table, quantiles=(0.1, 0.9))
+    record, occurrence = model.predict_draws(table)
+    summary = bayes_model.summarize_draws(record, occurrence, table.index, quantiles=(0.1, 0.9))
     parts = [table[["polygon"]], summary[list(OUTPUT_COLUMNS)].rename(columns=OUTPUT_COLUMNS),
              table[list(SNOW_COLUMNS)].rename(columns=SNOW_COLUMNS)]
-    natural_path = config.PATHS["ARTIFACTS"]["natural_likelihood_model"]
-    if natural_path.exists():
-        natural = joblib.load(natural_path).predict_interval(table, quantiles=(0.1, 0.9))
-        natural = natural[list(NATURAL_COLUMNS)].rename(columns=NATURAL_COLUMNS)
-        # The two models are fit separately, so a polygon whose few events were all
-        # natural can come out higher on the natural one. Natural releases are a
-        # subset of all releases, so each natural value is capped at its all-trigger match.
-        for key, column in NATURAL_COLUMNS.items():
-            natural[column] = natural[column].clip(upper=summary[key])
-        parts.append(natural)
+    share_path = config.PATHS["ARTIFACTS"]["natural_share_model"]
+    if share_path.exists():
+        import natural_share
+
+        natural = natural_share.natural_summary(record, occurrence, joblib.load(share_path), table, quantiles=(0.1, 0.9))
+        parts.append(natural[list(NATURAL_COLUMNS)].rename(columns=NATURAL_COLUMNS))
     else:
-        logging.info(f"No natural-only likelihood model at '{natural_path}'; natural columns left out.")
+        logging.info(f"No natural share model at '{share_path}'; natural columns left out.")
     return pd.concat(parts, axis=1)
 
 

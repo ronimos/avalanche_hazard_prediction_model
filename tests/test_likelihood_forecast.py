@@ -18,13 +18,22 @@ def _season_drivers(polygons=(1, 2), last_day=("2026-12-16", "2026-12-15")):
 
 
 class FixedModel:
-    """Stub with the parts of OccupancyDetectionModel that `predict` uses."""
+    """Stub with the parts of OccupancyDetectionModel that `predict` uses: 5 draws, occurrence 0.1 to 0.5."""
     _polygon_index = pd.Index([1, 2, 3])
 
-    def predict_interval(self, df, quantiles):
-        n = len(df)
-        return pd.DataFrame({"p_record": np.full(n, 0.05), "p_occurrence": np.full(n, 0.3),
-                             "p_occurrence_q10": np.full(n, 0.1), "p_occurrence_q90": np.full(n, 0.6)}, index=df.index)
+    def predict_draws(self, df):
+        occurrence = np.repeat(np.linspace(0.1, 0.5, 5)[:, None], len(df), axis=1)
+        return occurrence * 0.2, occurrence
+
+
+class FixedShare:
+    """Natural share stub: every release natural with probability `share`."""
+
+    def __init__(self, share):
+        self.share = share
+
+    def predict_draws(self, df, weekday=True):
+        return np.full((5, len(df)), self.share)
 
 
 def test_season_of_uses_water_year():
@@ -47,7 +56,7 @@ def test_predict_returns_occurrence_probability_interval_and_record_probability(
     path = tmp_path / "likelihood_model.joblib"
     joblib.dump(FixedModel(), path)
     monkeypatch.setitem(config.PATHS["ARTIFACTS"], "likelihood_model", path)
-    monkeypatch.setitem(config.PATHS["ARTIFACTS"], "natural_likelihood_model", tmp_path / "missing.joblib")
+    monkeypatch.setitem(config.PATHS["ARTIFACTS"], "natural_share_model", tmp_path / "missing.joblib")
     monkeypatch.setattr(lf.sd, "build_driver_table", lambda seasons: _season_drivers(last_day=("2026-12-16", "2026-12-16")))
 
     out = lf.predict(pd.Timestamp("2026-12-15"))
@@ -60,34 +69,25 @@ def test_predict_returns_occurrence_probability_interval_and_record_probability(
     assert (out["dry_slab_record_probability"] < out["dry_slab_probability"]).all()
 
 
-def test_predict_adds_natural_columns_when_that_model_exists(monkeypatch, tmp_path):
-    for key in ["likelihood_model", "natural_likelihood_model"]:
-        joblib.dump(FixedModel(), tmp_path / f"{key}.joblib")
-        monkeypatch.setitem(config.PATHS["ARTIFACTS"], key, tmp_path / f"{key}.joblib")
-    monkeypatch.setattr(lf.sd, "build_driver_table", lambda seasons: _season_drivers(last_day=("2026-12-16", "2026-12-16")))
-    lf._FORECAST_TABLES.clear()
-
-    out = lf.predict(pd.Timestamp("2026-12-15"))
-
-    assert list(out.columns) == ["polygon", *lf.OUTPUT_COLUMNS.values(), *lf.SNOW_COLUMNS.values(), *lf.NATURAL_COLUMNS.values()]
-    assert out["natural_dry_slab_probability"].tolist() == [0.3, 0.3]
-
-
-class HigherModel(FixedModel):
-    """Natural-only stub that comes out above the all-trigger stub on every value."""
-
-    def predict_interval(self, df, quantiles):
-        return super().predict_interval(df, quantiles) * 1.2
-
-
-def test_predict_caps_natural_columns_at_the_all_trigger_values(monkeypatch, tmp_path):
-    for key, model in [("likelihood_model", FixedModel()), ("natural_likelihood_model", HigherModel())]:
+def _with_share(monkeypatch, tmp_path, share):
+    for key, model in [("likelihood_model", FixedModel()), ("natural_share_model", FixedShare(share))]:
         joblib.dump(model, tmp_path / f"{key}.joblib")
         monkeypatch.setitem(config.PATHS["ARTIFACTS"], key, tmp_path / f"{key}.joblib")
     monkeypatch.setattr(lf.sd, "build_driver_table", lambda seasons: _season_drivers(last_day=("2026-12-16", "2026-12-16")))
-    lf._FORECAST_TABLES.clear()
+    return lf.predict(pd.Timestamp("2026-12-15"))
 
-    out = lf.predict(pd.Timestamp("2026-12-15"))
+
+def test_predict_adds_natural_columns_when_the_share_model_exists(monkeypatch, tmp_path):
+    out = _with_share(monkeypatch, tmp_path, 0.6)
+
+    assert list(out.columns) == ["polygon", *lf.OUTPUT_COLUMNS.values(), *lf.SNOW_COLUMNS.values(), *lf.NATURAL_COLUMNS.values()]
+    # Natural only is natural or triggered times the share, draw by draw
+    for key, column in lf.NATURAL_COLUMNS.items():
+        np.testing.assert_allclose(out[column], 0.6 * out[lf.OUTPUT_COLUMNS[key]])
+
+
+def test_natural_never_exceeds_natural_or_triggered(monkeypatch, tmp_path):
+    out = _with_share(monkeypatch, tmp_path, 1.0)
 
     for key, column in lf.NATURAL_COLUMNS.items():
-        assert (out[column] <= out[lf.OUTPUT_COLUMNS[key]]).all()
+        np.testing.assert_allclose(out[column], out[lf.OUTPUT_COLUMNS[key]])

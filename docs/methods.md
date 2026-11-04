@@ -354,7 +354,15 @@ In practice:
 
 ### Natural only
 
-Forecasters asked for natural avalanches separately from natural or triggered, since the equal-rate assumption above fits naturals better. A second model, identical to the operational one (drivers only, Bayesian, fit on all three seasons), uses the label `natural_dry_slab`: a polygon-day with at least one D2+ dry slab record whose trigger is natural (N). Records with an unknown trigger count as no natural event. The label has 444/333/190 record-days in seasons 2023/24/25, against 688/525/292 for all dry slab, in 83 polygons. Only about 5% of natural D2+ dry slab records have a known date (59% of triggered ones), because most naturals are found after the fact, so its day labels are fuzzier.
+Forecasters asked for natural avalanches separately from natural or triggered, since the equal-rate assumption above fits naturals better. The natural label, `natural_dry_slab`, is a polygon-day with at least one D2+ dry slab record whose trigger is natural (N). Records with an unknown trigger count as no natural event. The label has 444/333/190 record-days in seasons 2023/24/25, against 688/525/292 for all dry slab, in 83 polygons. Only about 5% of natural D2+ dry slab records have a known date (59% of triggered ones), because most naturals are found after the fact, so its day labels are fuzzier.
+
+Natural releases are a subset of all releases, so the natural probability is the operational probability times the chance that a release is natural:
+
+P(natural D2+ dry slab) = P(D2+ dry slab) × s
+
+The share s is a Bayesian logistic model (`natural_share.py`) fit on the 1,505 polygon-days with a D2+ dry slab record, with outcome 1 when a natural record is among them (967 are). It has the snowpack drivers, a day-of-season curve, partially pooled region and polygon effects, and a weekend/holiday term. Pooling keeps a polygon with a few records, all natural, near the average: polygon 98, with 4 such records, gets a polygon effect of +0.48 on the logit scale, against a spread of 0.6 across polygons. Weekends and holidays lower the recorded share (−0.22, sd 0.13), since more triggered avalanches are reported then, so the forecast share is taken at a weekday. Each posterior draw of the operational model is multiplied by a draw of the share, so the natural value, its 80% range and its record probability are never above natural or triggered. The share is of recorded releases; reading it as the share of all releases assumes naturals and triggered avalanches are reported at the same rate.
+
+A first version fit a separate occupancy-detection model on the natural label. It ranked about the same, but nothing kept it below the operational model, and on Nov 5, 2026 it came out above it in four polygons (98: 45.5% against 43.7%). It was replaced by the share.
 
 Held-out results on natural labels (seasons 2023 / 2024 / 2025):
 
@@ -364,8 +372,9 @@ Held-out results on natural labels (seasons 2023 / 2024 / 2025):
 | Driver logistic, natural label | .829 / .829 / .919 | .228 / .233 / .312 |
 | Bayesian, natural label | .827 / .827 / .911 | .216 / .244 / .297 |
 | Operational model (natural or triggered), scored on natural labels | .829 / .824 / .906 | .209 / .220 / .288 |
+| **Operational model × natural share (used)** | .827 / .827 / .911 | .220 / .250 / .285 |
 
-The natural model ranks polygon-days almost exactly as the operational model does (Spearman 0.98 in every season; on a typical day about 8 of the 10 highest polygons are the same). Its gain on natural days is a little average precision, mostly in 2024, and none in within-polygon AUC. Driver effects differ by at most 0.26 (minimum snow grain size and 3-day SWE change), within one posterior standard deviation. The main difference is the level: natural-only probabilities are about two-thirds of natural or triggered. The map offers it as **Natural only**, with a note that it is mainly a lower level, not a different pattern. The model is `artifacts/natural_likelihood_model.joblib` (`likelihood_forecast.py --train --label natural_dry_slab`); without it the natural fields are left out.
+The share version scores the same as the separate natural model on within-polygon AUC and about the same on average precision. Its held-out share matches the observed one (predicted .617 / .638 / .669, observed .645 / .634 / .651). Both rank polygon-days almost exactly as the operational model does (Spearman 0.98 for the separate model; on Nov 5, 2026 the share version and the separate model had the same 10 highest polygons). The main difference from natural or triggered is the level: the share is about 0.6 on a typical polygon-day, ranging from 0.2 to 0.95 with the drivers and the polygon. The map offers it as **Natural only**, with a note that it is mainly a lower level, not a different pattern. The share model is `artifacts/natural_share_model.joblib` (`likelihood_forecast.py --train --label natural_dry_slab`; `natural_share.py --evaluate` for the held-out scores); without it the natural fields are left out.
 
 ### Limitations of the forecast
 
