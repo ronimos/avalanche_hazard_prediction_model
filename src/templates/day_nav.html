@@ -1,0 +1,94 @@
+<!-- day-nav: forecast day picker, added by dry_slab_map.publish (the page is __DAY__) -->
+<style>
+#day-nav .switch button:disabled { opacity: 0.4; cursor: default; }
+#day-nav a { color: var(--accent); font-weight: 600; font-size: 0.9rem; }
+</style>
+<script>
+(() => {
+// Published maps: <root>/next_day_prediction.html (latest) and <root>/maps/YYYY-MM-DD.html,
+// with <root>/maps/dates.json listing the archived days. Works from either location.
+// Changing day carries the chosen layer, menus, base map and locked polygon in the URL hash
+// (#view=chg&band=ntl&...). The page's own controls are driven through the DOM, so this works
+// on every page version; window.dsmPolygon (added at publish) reaches the polygon panel.
+const DAY = "__DAY__";
+const root = location.href.split(/[?#]/)[0].replace(/(maps\/)?[^\/]*$/, "");
+const controls = document.querySelector("header .controls") || document.querySelector("header");
+const MENUS = ["trigger", "band", "source"];
+const viewButtons = () => [...document.querySelectorAll("header .switch button[data-view]")];
+const layerInput = text => [...document.querySelectorAll(".leaflet-control-layers label")]
+  .find(l => l.textContent.trim() === text)?.querySelector("input");
+
+function readState() {
+  const s = {};
+  const pressed = viewButtons().find(b => b.getAttribute("aria-pressed") === "true");
+  if (pressed) s.view = pressed.dataset.view;
+  MENUS.forEach(id => { const el = document.getElementById(id); if (el && !el.hidden) s[id] = el.value; });
+  const base = document.querySelector(".leaflet-control-layers-base input:checked");
+  if (base) s.base = base.closest("label").textContent.trim();
+  const labels = layerInput("Polygon numbers");
+  if (labels) s.labels = labels.checked ? "1" : "0";
+  const polygon = window.dsmPolygon?.get();
+  if (polygon != null) s.polygon = polygon;
+  return s;
+}
+
+function applyState(s) {
+  const has = v => v !== undefined && v !== null;
+  // The trigger menu switches back to the dry slab layer, so it goes before the view
+  MENUS.forEach(id => {
+    const el = document.getElementById(id);
+    if (el && !el.hidden && has(s[id]) && [...el.options].some(o => o.value === s[id]) && el.value !== s[id]) {
+      el.value = s[id];
+      el.dispatchEvent(new Event("change"));
+    }
+  });
+  if (has(s.view)) {
+    const buttons = viewButtons(), find = v => buttons.find(b => b.dataset.view === v);
+    // Maps before Nov 4 had separate rating up / down layers instead of one rating change layer
+    const target = find(s.view) || (["up", "down"].includes(s.view) && find("chg")) || (s.view === "chg" && find("down"));
+    if (target && target.getAttribute("aria-pressed") !== "true") target.click();
+  }
+  if (has(s.base)) { const input = layerInput(s.base); if (input && !input.checked) input.click(); }
+  if (has(s.labels)) { const input = layerInput("Polygon numbers"); if (input && input.checked !== (s.labels === "1")) input.click(); }
+  if (has(s.polygon) && window.dsmPolygon) window.dsmPolygon.set(Number(s.polygon));
+}
+
+window.dsmDayNav = { readState, applyState };
+if (location.hash.length > 1) {
+  try { applyState(Object.fromEntries(new URLSearchParams(location.hash.slice(1)))); } catch (e) {}
+}
+if (!controls || location.protocol === "file:") return;
+
+const label = d => new Date(d + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+fetch(root + "maps/dates.json", { cache: "no-store" })
+  .then(r => r.ok ? r.json() : Promise.reject(r.status))
+  .then(dates => {
+    dates = [...new Set(dates.concat(DAY))].sort().reverse();
+    const latest = dates[0], i = dates.indexOf(DAY);
+    const go = d => {
+      const page = d === latest ? root + "next_day_prediction.html" : root + "maps/" + d + ".html";
+      location.href = page + "#" + new URLSearchParams(readState()).toString();
+    };
+    const box = document.createElement("div");
+    box.className = "control";
+    box.id = "day-nav";
+    box.innerHTML = '<span>Forecast day</span>'
+      + '<div class="switch" role="group" aria-label="Step through forecast days">'
+      + '<button type="button" data-step="1" aria-label="Previous day">&#8249; Earlier</button>'
+      + '<button type="button" data-step="-1" aria-label="Next day">Later &#8250;</button></div>'
+      + '<select aria-label="Forecast day">' + dates.map(d =>
+          `<option value="${d}"${d === DAY ? " selected" : ""}>${label(d)}${d === latest ? " (latest)" : ""}</option>`).join("") + '</select>'
+      + (DAY === latest ? "" : '<a id="day-latest" href="' + root + 'next_day_prediction.html">Go to latest</a>');
+    box.querySelectorAll("button").forEach(b => {
+      const j = i + Number(b.dataset.step);
+      b.disabled = j < 0 || j >= dates.length;
+      b.addEventListener("click", () => go(dates[j]));
+    });
+    box.querySelector("select").addEventListener("change", e => go(e.target.value));
+    box.querySelector("#day-latest")?.addEventListener("click", e => { e.preventDefault(); go(latest); });
+    controls.prepend(box);
+  })
+  .catch(() => {});
+})();
+</script>
+<!-- /day-nav -->

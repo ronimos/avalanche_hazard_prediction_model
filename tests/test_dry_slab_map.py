@@ -78,3 +78,42 @@ def test_no_map_without_dry_slab_predictions(monkeypatch, tmp_path):
     monkeypatch.setitem(config.PATHS["RESULTS"], "hazard_predictions_csv", csv)
 
     assert dsm.create_dry_slab_map("2026-12-15") is None
+
+
+def _write_map(path, day):
+    path.write_text(f"<html><body><p>map {day}</p></body></html>", encoding="utf-8")
+    return path
+
+
+def test_publish_archives_each_day_and_keeps_the_newest_live(tmp_path):
+    web = tmp_path / "web"
+    for day in ["2026-12-14", "2026-12-16"]:
+        dsm.publish(day, web, _write_map(tmp_path / f"{day}.html", day))
+    # Re-publishing an older day must not replace the live page
+    dsm.publish("2026-12-15", web, _write_map(tmp_path / "2026-12-15.html", "2026-12-15"))
+
+    assert json.loads((web / "maps" / "dates.json").read_text()) == ["2026-12-14", "2026-12-15", "2026-12-16"]
+    live = (web / "next_day_prediction.html").read_text()
+    assert "map 2026-12-16" in live and 'const DAY = "2026-12-16"' in live
+    archived = (web / "maps" / "2026-12-15.html").read_text()
+    assert "map 2026-12-15" in archived and archived.index("day-nav") < archived.index("</body>")
+
+
+def test_add_day_nav_is_added_once():
+    once = dsm.add_day_nav("<body></body>", pd.Timestamp("2026-12-15"))
+
+    assert dsm.add_day_nav(once, pd.Timestamp("2026-12-15")) == once
+    assert "__DAY__" not in once
+
+
+def test_publish_without_a_map_does_nothing(tmp_path):
+    assert dsm.publish("2026-12-15", tmp_path / "web", tmp_path / "missing.html") is None
+    assert not (tmp_path / "web").exists()
+
+
+def test_add_day_nav_hooks_the_polygon_panel_inside_the_page_script():
+    page = "<body><script>\n(() => {\nconst layers = new Map();\n})();\n</script>\n</body>"
+
+    html = dsm.add_day_nav(page, pd.Timestamp("2026-12-15"))
+
+    assert html.index("window.dsmPolygon") < html.index("})();") < html.index("day-nav")

@@ -12,14 +12,21 @@ ratings and outlook, and the forecast's limitations.
 
 It reads the day's predictions CSV written by predict.py, so it runs after it.
 
+`--publish DIR` copies an already written map to the web folder instead: DIR/maps/<date>.html plus
+DIR/next_day_prediction.html when it's the newest day, with a forecast day picker added, and
+DIR/maps/dates.json listing the archived days so earlier forecasts can be looked up.
+
 Usage:
     python dry_slab_map.py --date 2026-12-15
+    python dry_slab_map.py --date 2026-12-15 --publish /home/www/html/ron/prediction_model
 
 Author: Ron Simenhois
 """
 import argparse
 import json
 import logging
+import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
@@ -32,6 +39,14 @@ import config
 import likelihood_data as ld
 
 TEMPLATE = Path(__file__).parent / "templates" / "dry_slab_map.html"
+DAY_NAV = Path(__file__).parent / "templates" / "day_nav.html"
+LATEST_PAGE = "next_day_prediction.html"
+ARCHIVE_DIR = "maps"
+# Lets the day picker read and set the panel's polygon, which lives inside the page script. Added at the end
+# of that script so it also works on maps written before the picker existed (those have select but no lock).
+POLYGON_HOOK = ("window.dsmPolygon = { get: () => typeof locked !== \"undefined\" && locked != null ? locked : null, "
+                "set: id => { if (layers.has(id)) (typeof lock === \"function\" ? lock : select)(id); } };\n")
+SCRIPT_END = re.compile(r"\n\}\)\(\);\r?\n</script>")
 # Degrees; keeps the page small without visibly changing polygon outlines
 SIMPLIFY_TOLERANCE = 0.002
 DANGER_LEVELS = {1: "Low", 2: "Moderate", 3: "Considerable", 4: "High"}
@@ -136,11 +151,93 @@ def create_dry_slab_map(prediction_date: Union[str, datetime]) -> Optional[Path]
     return path
 
 
+def add_day_nav(html: str, date: pd.Timestamp) -> str:
+    """Adds the forecast day picker to a map page (any template version); no-op if it's already there."""
+    if "<!-- day-nav:" in html:
+        return html
+    ends = list(SCRIPT_END.finditer(html))
+    if ends:
+        at = ends[-1].start() + 1
+        html = html[:at] + POLYGON_HOOK + html[at:]
+    nav = DAY_NAV.read_text(encoding="utf-8").replace("__DAY__", f"{date:%Y-%m-%d}")
+    head, sep, tail = html.rpartition("</body>")
+    return head + nav + sep + tail if sep else html + nav
+
+
+def _write_shared(path: Path, text: str) -> None:
+    """Writes a file the scheduled run (caic) and manual runs (ron) both overwrite: atomic, group-writable."""
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    try:
+        os.chmod(tmp, 0o664)
+    except PermissionError:
+        pass
+    os.replace(tmp, path)
+
+
+def archived_days(web_dir: Union[str, Path]) -> list:
+    """Forecast days with a map in the web folder's archive, oldest first."""
+    archive = Path(web_dir) / ARCHIVE_DIR
+    return sorted(p.stem for p in archive.glob("*.html") if re.fullmatch(r"\d{4}-\d{2}-\d{2}", p.stem))
+
+
+def publish(prediction_date: Union[str, datetime], web_dir: Union[str, Path], source: Optional[Path] = None) -> Optional[Path]:
+    """
+    Publishes a written map: web_dir/maps/<date>.html, web_dir/maps/dates.json, and
+    web_dir/next_day_prediction.html when no later day is archived (re-publishing an old day
+    doesn't replace the live page).
+
+    Args:
+        prediction_date (Union[str, datetime]): Forecast day, a datetime or 'YYYY-MM-DD'.
+        web_dir (Union[str, Path]): The folder that holds next_day_prediction.html.
+        source (Optional[Path]): Map to publish; defaults to the day's map in results/.
+
+    Returns:
+        Optional[Path]: The archived page, or None when the day has no map.
+    """
+    date = pd.Timestamp(prediction_date).normalize()
+    source = Path(source) if source else output_path(date)
+    if not source.exists():
+        logging.warning(f"No map at '{source}'; nothing published for {date.date()}.")
+        return None
+    web_dir = Path(web_dir)
+    archive = web_dir / ARCHIVE_DIR
+    if not archive.exists():
+        archive.mkdir(parents=True)
+        try:
+            os.chmod(archive, 0o2775)
+        except PermissionError:
+            pass
+    html = add_day_nav(source.read_text(encoding="utf-8"), date)
+    day = f"{date:%Y-%m-%d}"
+    page = archive / f"{day}.html"
+    _write_shared(page, html)
+    days = archived_days(web_dir)
+    _write_shared(archive / "dates.json", json.dumps(days))
+    if day == days[-1]:
+        latest = web_dir / LATEST_PAGE
+        # Copy in place so the live page keeps its owner and group
+        if latest.exists():
+            with open(latest, "w", encoding="utf-8") as f:
+                f.write(html)
+        else:
+            _write_shared(latest, html)
+    logging.info(f"Published the {day} map to '{page}'" + (f" and '{web_dir / LATEST_PAGE}'" if day == days[-1] else ""))
+    return page
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Write the dry slab map for one forecast day.")
     parser.add_argument("--date", required=True, help="Forecast day, YYYY-MM-DD.")
+    parser.add_argument("--publish", metavar="WEB_DIR",
+                        help="Publish the day's already written map to this folder instead of writing it.")
+    parser.add_argument("--source", type=Path, help="With --publish: the map file to publish (default: the day's map in results/).")
     args = parser.parse_args()
-    create_dry_slab_map(args.date)
+    if args.publish:
+        if publish(args.date, args.publish, args.source) is None:
+            raise SystemExit(1)
+    else:
+        create_dry_slab_map(args.date)
 
 
 if __name__ == "__main__":
